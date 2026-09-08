@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+
+# книги — не часть репозитория
+*.fb2
+*.fb2.zip
+*.fbz
+*.epub
