@@ -38,6 +38,9 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - uses: oven-sh/setup-bun@v2
       - run: pnpm install --frozen-lockfile
+      # Читалку для браузера проверяет настоящий Chromium: подделка не покажет
+      # ни сломанный Worker, ни развалившуюся кодировку.
+      - run: npx playwright install --with-deps chromium
       # Собирается всё: сквозная проверка синхронизации запускает и сервер.
       - run: pnpm build
       - name: Проверить сборку под Bun

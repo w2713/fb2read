@@ -7,13 +7,14 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -b packages/core && pnpm --filter fb2read build && pnpm --filter fb2read-server build",
+    "build": "tsc -b packages/core && pnpm --filter fb2read build && pnpm --filter fb2read-server build && pnpm --filter @fb2read/web build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b packages/core packages/cli packages/server --pretty"
+    "typecheck": "tsc -b packages/core packages/cli packages/server packages/web --pretty"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "playwright": "^1.63.0",
     "tsup": "^8.5.1",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

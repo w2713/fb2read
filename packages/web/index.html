@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>fb2read</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <main id="app">
+      <section id="start">
+        <h1>fb2read</h1>
+        <p>Читалка книг FB2 и EPUB. Откройте книгу с устройства.</p>
+        <label class="pick">
+          <input type="file" id="file" accept=".fb2,.fb2.zip,.fbz,.epub,.zip" />
+          <span>Выбрать книгу</span>
+        </label>
+        <p class="hint">Или перетащите файл сюда.</p>
+      </section>
+      <article id="book" hidden></article>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

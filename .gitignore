@@ -24,3 +24,5 @@ release/
 # лицензия копируется в пакет при упаковке
 packages/cli/LICENSE
 packages/server/LICENSE
+packages/web/dist
+packages/web/dist-types
