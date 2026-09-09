@@ -7,7 +7,7 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "pnpm -r --filter ./packages/** build",
+    "build": "tsc -b packages/core && pnpm --filter fb2read build",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc -b packages/core packages/cli --pretty"

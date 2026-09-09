@@ -23,6 +23,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
+      # Сквозные тесты запускают собранный бандл, поэтому сборка идёт раньше.
+      - run: pnpm build
       - run: pnpm test
 
   bun:
