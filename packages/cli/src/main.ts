@@ -23,6 +23,7 @@ import { FileSource } from "./fsSource.js";
 import { libraryLines, scanDir } from "./library.js";
 import { configFile } from "./paths.js";
 import { JsonFileStore } from "./store.js";
+import { cmdPull, cmdPush, cmdRemote, cmdSync, syncOne, syncSettings } from "./sync.js";
 import { NodeTerminal } from "./term/terminal.js";
 import { runLibrary } from "./ui/library.js";
 import { readBook } from "./ui/read.js";
@@ -110,7 +111,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   if (args.writeConfig) return writeConfigSample(args.config ?? configFile());
 
   const configPath = args.config ?? configFile();
-  let config: ConfigResult = { prefs: {}, keys: {}, notes: [] };
+  let config: ConfigResult = { prefs: {}, sync: {}, keys: {}, notes: [] };
   try {
     config = readConfig(await readFile(configPath, "utf-8"));
   } catch (e) {
@@ -121,6 +122,22 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   for (const note of config.notes) fail(note);
 
   const store = new JsonFileStore();
+
+  // Команды синхронизации. Книгу с именем «sync» это не заслоняет: если
+  // такой файл есть, он и открывается — команду тогда пишут как ./sync.
+  if (args.command && !safeExists(args.command)) {
+    switch (args.command) {
+      case "sync":
+        return cmdSync(config.sync, store);
+      case "remote":
+        return cmdRemote(config.sync);
+      case "push":
+        return cmdPush(config.sync, args.file, store);
+      case "pull":
+        return cmdPull(config.sync, args.file, args.all, store);
+    }
+  }
+
   const settings = await store.loadSettings();
   const prefs: Prefs = {
     theme: choose(args.theme, config.prefs.theme, settings.theme as Theme, "auto"),
@@ -203,6 +220,33 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   const path = resolve(args.file!);
   const key = await bookKey(path, source.size);
+
+  // Слияние до чтения, а не после: смысл в том, чтобы книга открылась там,
+  // где её оставили на другом устройстве. Ждём не дольше трёх секунд —
+  // читатель пришёл читать, а не смотреть на сеть.
+  const sync = syncSettings(config.sync);
+  let syncNote = "";
+  if (sync?.auto) {
+    const before = await store.record(key);
+    const outcome = await syncOne(
+      sync,
+      store,
+      key,
+      {
+        hash: book.hash,
+        block: before?.block ?? 0,
+        total: book.blocks.length,
+        title: book.title,
+        author: book.author,
+        at: before?.at ?? 0,
+        device: sync.device,
+        bookmarks: before?.bookmarks ?? [],
+      },
+      path,
+    );
+    syncNote = outcome.note;
+  }
+
   const start = args.fromStart ? 0 : await store.loadPosition(key);
   const bookmarks = await store.loadBookmarks(key);
 
@@ -223,6 +267,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       mouse: prefs.mouse,
       keys: prefs.keys,
       bookmarks,
+      notice: syncNote,
       saveBookmarks: (marks) => {
         void store.saveBookmarks(key, marks, {
           title: book.title,
@@ -253,6 +298,28 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     columns: result.reader.columns,
     mouse: result.reader.mouse,
   });
+
+  // Отправляем, где остановились. Экран уже отпущен, поэтому сообщение
+  // печатается обычной строкой и никуда не пропадает.
+  if (sync?.auto) {
+    const outcome = await syncOne(
+      sync,
+      store,
+      key,
+      {
+        hash: book.hash,
+        block: result.block,
+        total: book.blocks.length,
+        title: book.title,
+        author: book.author,
+        at: Date.now() / 1000,
+        device: sync.device,
+        bookmarks: result.bookmarks,
+      },
+      path,
+    );
+    if (!outcome.state) fail(`синхронизация не удалась: ${outcome.note}`);
+  }
   return 0;
 }
 
@@ -261,6 +328,16 @@ function safeIsDirectory(path: string): boolean {
     return statSync(path).isDirectory();
   } catch {
     return false; // нет такого файла — пусть об этом скажет открытие книги
+  }
+}
+
+/** Есть ли такой файл или каталог: команда не должна заслонять книгу. */
+function safeExists(path: string): boolean {
+  try {
+    statSync(path);
+    return true;
+  } catch {
+    return false;
   }
 }
 

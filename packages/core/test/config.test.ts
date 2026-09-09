@@ -42,7 +42,26 @@ describe("конфиг", () => {
     const sample = configSample();
     for (const { action } of ACTIONS) expect(sample).toContain(action);
     // Все строки с действиями закомментированы, поэтому настроек не даёт.
-    expect(readConfig(sample)).toEqual({ prefs: {}, keys: {}, notes: [] });
+    expect(readConfig(sample)).toEqual({ prefs: {}, sync: {}, keys: {}, notes: [] });
+  });
+
+  it("читает настройки синхронизации", () => {
+    const { sync, notes } = readConfig(
+      "[sync]\nurl = https://books.example.org\ntoken = abc123\nauto = yes\n",
+    );
+    expect(sync).toEqual({ url: "https://books.example.org", token: "abc123", auto: true });
+    expect(notes).toEqual([]);
+  });
+
+  it("без раздела [sync] синхронизации нет", () => {
+    expect(readConfig("[reader]\nwidth = 72\n").sync).toEqual({});
+  });
+
+  it("жалуется на непонятное auto, но остальное берёт", () => {
+    const { sync, notes } = readConfig("[sync]\nurl = http://localhost\nauto = когда-нибудь\n");
+    expect(sync.url).toBe("http://localhost");
+    expect(sync.auto).toBeUndefined();
+    expect(notes).toEqual(["в конфиге auto должно быть yes или no"]);
   });
 });
 

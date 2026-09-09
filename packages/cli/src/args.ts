@@ -12,8 +12,14 @@ import { IMAGE_BACKENDS, THEME_ORDER, type ImageBackend, type Theme } from "@fb2
 export const APP = "fb2read";
 export const VERSION = "0.12.0";
 
+/** Команды синхронизации: первое слово, а не ключ. */
+export const COMMANDS = ["sync", "push", "pull", "remote"] as const;
+export type Command = (typeof COMMANDS)[number];
+
 /** Что разобрали из командной строки. */
 export interface Args {
+  /** Команда синхронизации, если первым словом стоит она. */
+  command?: Command;
   file?: string;
   width?: number;
   spacing?: number;
@@ -27,6 +33,7 @@ export interface Args {
   info: boolean;
   writeConfig: boolean;
   fromStart: boolean;
+  all: boolean;
   help: boolean;
   version: boolean;
 }
@@ -35,12 +42,19 @@ export interface Args {
 export class ArgsError extends Error {}
 
 export const HELP = `Использование: ${APP} [КЛЮЧИ] [ФАЙЛ]
+                ${APP} КОМАНДА [АРГУМЕНТ]
 
 Читалка книг FB2 и EPUB для терминала.
 
 Позиционный аргумент:
   ФАЙЛ                  книга .fb2 / .fb2.zip / .epub либо каталог с книгами;
                         без аргумента открывается список недавних
+
+Команды синхронизации (нужен раздел [sync] в конфиге):
+  sync                  обменяться позициями и закладками, книги не трогая
+  push ФАЙЛ             выгрузить книгу и её позицию на сервер
+  pull ЧТО | --all      скачать книгу с сервера в каталог библиотеки
+  remote                показать книги на сервере с прогрессом
 
 Ключи:
   -w, --width N         ширина текстовой колонки (по умолчанию 80)
@@ -51,6 +65,7 @@ export const HELP = `Использование: ${APP} [КЛЮЧИ] [ФАЙЛ]
       --images СПОСОБ   ${IMAGE_BACKENDS.join(", ")}
       --no-mouse        не захватывать мышь
       --from-start      не восстанавливать сохранённую позицию
+      --all             для pull: скачать все книги с сервера
       --config ФАЙЛ     файл настроек
       --write-config    записать образец файла настроек и выйти
       --dump            вывести текст в stdout (например, | less -R)
@@ -100,6 +115,7 @@ export function parseCliArgs(argv: string[]): Args {
         images: { type: "string" },
         "no-mouse": { type: "boolean" },
         "from-start": { type: "boolean" },
+        all: { type: "boolean" },
         config: { type: "string" },
         "write-config": { type: "boolean" },
         dump: { type: "boolean" },
@@ -114,15 +130,23 @@ export function parseCliArgs(argv: string[]): Args {
   }
 
   const v = parsed.values;
-  if (parsed.positionals.length > 1) {
-    throw new ArgsError(`лишний аргумент: ${parsed.positionals[1]}`);
+
+  // Первое слово может быть командой синхронизации. Книгу с таким именем
+  // это не заслоняет: main проверит, нет ли такого файла, и предпочтёт файл.
+  const first = parsed.positionals[0];
+  const command = first && (COMMANDS as readonly string[]).includes(first) ? (first as Command) : undefined;
+  const positionals = command ? parsed.positionals.slice(1) : parsed.positionals;
+
+  if (positionals.length > 1) {
+    throw new ArgsError(`лишний аргумент: ${positionals[1]}`);
   }
 
   // Последний из -1 и -2 не выигрывает: как и в эталоне, разворот сильнее.
   const columns = v.spread ? 2 : v.single ? 1 : undefined;
 
   return {
-    file: parsed.positionals[0],
+    command,
+    file: positionals[0],
     width: integer("--width", v.width),
     spacing: integer("--spacing", v.spacing, [1, 2, 3]),
     columns,
@@ -135,6 +159,7 @@ export function parseCliArgs(argv: string[]): Args {
     info: !!v.info,
     writeConfig: !!v["write-config"],
     fromStart: !!v["from-start"],
+    all: !!v.all,
     help: !!v.help,
     version: !!v.version,
   };

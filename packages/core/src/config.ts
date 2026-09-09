@@ -60,9 +60,18 @@ export function parseIni(text: string): Ini {
 const TRUE = new Set(["1", "yes", "true", "on"]);
 const FALSE = new Set(["0", "no", "false", "off"]);
 
+/** Настройки синхронизации с сервером. */
+export interface SyncPrefs {
+  url?: string;
+  token?: string;
+  /** Сливать ли состояние при открытии и выходе из книги. */
+  auto?: boolean;
+}
+
 /** Что вышло из конфига: настройки, клавиши и замечания к ним. */
 export interface ConfigResult {
   prefs: Prefs;
+  sync: SyncPrefs;
   keys: Record<string, string>;
   notes: string[];
 }
@@ -105,7 +114,18 @@ export function readConfig(text: string): ConfigResult {
     else notes.push("в конфиге mouse должно быть yes или no");
   }
 
-  return { prefs, keys: ini["keys"] ?? {}, notes };
+  const sync: SyncPrefs = {};
+  const syncSection = ini["sync"] ?? {};
+  if (syncSection["url"]) sync.url = syncSection["url"]!.trim();
+  if (syncSection["token"]) sync.token = syncSection["token"]!.trim();
+  if ("auto" in syncSection) {
+    const value = syncSection["auto"]!.trim().toLowerCase();
+    if (TRUE.has(value)) sync.auto = true;
+    else if (FALSE.has(value)) sync.auto = false;
+    else notes.push("в конфиге auto должно быть yes или no");
+  }
+
+  return { prefs, sync, keys: ini["keys"] ?? {}, notes };
 }
 
 /** Образец конфига со всеми действиями и их клавишами по умолчанию. */
@@ -121,6 +141,13 @@ export function configSample(): string {
 # theme = auto        auto, night, sepia, day
 # images = auto       auto, kitty, iterm, chafa, sixel, off
 # mouse = yes         захватывать ли мышь
+
+[sync]
+# Синхронизация книг и позиции чтения со своим сервером.
+# Сервер поднимается командой fb2read-server; как — написано в README.
+# url = https://books.example.org
+# token = ...            либо переменная окружения FB2READ_SYNC_TOKEN
+# auto = yes             сливать позицию при открытии и выходе из книги
 
 [keys]
 # Клавиши через запятую. Понимаются одиночные символы, имена

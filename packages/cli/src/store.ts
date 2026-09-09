@@ -10,14 +10,23 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import {
+  mergeBookmarks,
   progressPercent,
   type Bookmark,
   type PositionRecord,
   type RecentEntry,
   type Settings,
   type StateStore,
+  type SyncState,
 } from "@fb2read/core";
 import { stateFile } from "./paths.js";
+
+/** Состояние книги вместе с тем, где она лежит на этом устройстве. */
+export interface LocalSyncState extends SyncState {
+  /** Ключ в positions.json. */
+  key: string;
+  path: string;
+}
 
 const SETTINGS_KEY = "__settings__";
 
@@ -111,6 +120,79 @@ export class JsonFileStore implements StateStore {
         ? (current as Settings)
         : {};
     data[SETTINGS_KEY] = { ...settings, ...patch };
+    this.write(data);
+  }
+
+  // --- синхронизация -------------------------------------------------------
+
+  /** Запись целиком: нужна синхронизации, которой мало одной позиции. */
+  async record(key: string): Promise<PositionRecord | null> {
+    return this.entry(key);
+  }
+
+  /**
+   * Книги, которые можно синхронизировать, — то есть с отпечатком.
+   *
+   * Книги, читанные до появления синхронизации, отпечатка не имеют: узнать
+   * их на другом устройстве не по чему. Отпечаток появится, когда книгу
+   * откроют снова, — молча пропускать их поэтому честно, но сказать об этом
+   * читателю всё же стоит, чем и занят countWithoutHash.
+   */
+  async syncableStates(device: string): Promise<LocalSyncState[]> {
+    const out: LocalSyncState[] = [];
+    for (const [key, value] of Object.entries(this.read())) {
+      if (key === SETTINGS_KEY) continue;
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      const record = value as PositionRecord;
+      if (!record.hash) continue;
+      out.push({
+        key,
+        path: record.path ?? "",
+        hash: record.hash,
+        block: record.block ?? 0,
+        total: record.total ?? 0,
+        title: record.title ?? "",
+        author: record.author ?? "",
+        at: record.at ?? 0,
+        device,
+        bookmarks: record.bookmarks ?? [],
+      });
+    }
+    return out;
+  }
+
+  /** Сколько записей осталось без отпечатка. */
+  async countWithoutHash(): Promise<number> {
+    let count = 0;
+    for (const [key, value] of Object.entries(this.read())) {
+      if (key === SETTINGS_KEY) continue;
+      if (!value || typeof value !== "object" || Array.isArray(value)) continue;
+      if (!(value as PositionRecord).hash) count += 1;
+    }
+    return count;
+  }
+
+  /**
+   * Кладёт пришедшее с сервера состояние в запись книги.
+   *
+   * Закладки именно сливаются, а не заменяются: между отправкой и ответом
+   * читатель мог поставить ещё одну, и затирать её нельзя. Путь остаётся
+   * местный — на сервере он чужой и здесь бесполезен.
+   */
+  async applyState(key: string, state: SyncState, path: string): Promise<void> {
+    const data = this.read();
+    const previous = this.entry(key);
+    const record: PositionRecord = {
+      block: state.block,
+      title: state.title || previous?.title || "",
+      author: state.author || previous?.author || "",
+      total: state.total || previous?.total || 0,
+      path: path || previous?.path || "",
+      at: state.at,
+      hash: state.hash,
+      bookmarks: mergeBookmarks(previous?.bookmarks ?? [], state.bookmarks ?? []),
+    };
+    data[key] = record;
     this.write(data);
   }
 

@@ -28,7 +28,7 @@ export { sha256Hex, sha1Hex } from "./hash.js";
 export { ACTIONS, parseKey, buildKeymap, keyTitle, helpRows } from "./keymap.js";
 export type { ActionSpec, Keymap } from "./keymap.js";
 export { readConfig, parseIni, configSample, THEME_ORDER, IMAGE_BACKENDS } from "./config.js";
-export type { Prefs, Theme, ImageBackend, ConfigResult, Ini } from "./config.js";
+export type { Prefs, SyncPrefs, Theme, ImageBackend, ConfigResult, Ini } from "./config.js";
 export { bookKey, progressPercent, plural } from "./state.js";
 export type { StateStore, PositionRecord, Bookmark, RecentEntry, Settings } from "./state.js";
 export { bookmarkLabel, bookmarksMarkdown, bookmarksFileName } from "./bookmarks.js";
