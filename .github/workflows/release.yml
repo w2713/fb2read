@@ -1,0 +1,133 @@
+name: Выпуск
+
+# Запускается на теге вида v0.12.0. Собирает бинарники под все системы,
+# складывает их в релиз вместе с контрольными суммами и публикует пакет
+# в npm — второй способ установки для тех, у кого уже есть Node.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  check:
+    name: Проверки перед выпуском
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+      - run: pnpm test
+      - name: Версия в пакете должна совпадать с тегом
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          tag="${GITHUB_REF#refs/tags/v}"
+          have=$(node -p "require('./packages/cli/package.json').version")
+          if [ "$tag" != "$have" ]; then
+            echo "тег v$tag, а в package.json $have" >&2
+            exit 1
+          fi
+
+  binaries:
+    name: Бинарники (${{ matrix.host }})
+    needs: check
+    runs-on: ${{ matrix.host }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Bun умеет кросс-компиляцию, поэтому Linux и Windows собираются
+          # с одной машины. macOS собирается на macOS: там нужна подпись,
+          # иначе Apple Silicon откажется запускать скачанное.
+          - host: ubuntu-latest
+            targets: linux-x64 linux-arm64 linux-x64-musl linux-arm64-musl windows-x64 windows-arm64
+          - host: macos-latest
+            targets: darwin-x64 darwin-arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with: { node-version: 22, cache: pnpm }
+      - uses: oven-sh/setup-bun@v2
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Собрать бинарники
+        run: ./scripts/build-binaries.sh "$PWD/release" ${{ matrix.targets }}
+      - name: Проверить, что собранное запускается
+        # Запустить можно только то, что собрано под эту же машину.
+        run: |
+          set -eu
+          case "${{ matrix.host }}" in
+            ubuntu-latest) archive=release/fb2read-linux-x64.tar.gz ;;
+            macos-latest) archive=release/fb2read-darwin-arm64.tar.gz ;;
+          esac
+          tar xzf "$archive" -C release
+          ./release/fb2read --version
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries-${{ matrix.host }}
+          path: |
+            release/*.tar.gz
+            release/*.zip
+
+  release:
+    name: Выложить релиз
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+          merge-multiple: true
+      - name: Собрать контрольные суммы
+        run: |
+          set -eu
+          mkdir -p release
+          find downloaded -type f \( -name '*.tar.gz' -o -name '*.zip' \) \
+            -exec mv {} release/ \;
+          cd release
+          for archive in *.tar.gz *.zip; do
+            [ -f "$archive" ] || continue
+            sha256sum "$archive" >> SHA256SUMS
+          done
+          cat SHA256SUMS
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+
+  npm:
+    name: Опубликовать в npm
+    needs: release
+    runs-on: ubuntu-latest
+    # Публикуется только по настоящему тегу и только если задан токен:
+    # без него шаг тихо пропускается, а релиз с бинарниками всё равно выйдет.
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          registry-url: https://registry.npmjs.org
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - name: Публикация
+        if: env.NODE_AUTH_TOKEN != ''
+        working-directory: packages/cli
+        run: npm publish --provenance --access public
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

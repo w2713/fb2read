@@ -16,3 +16,7 @@ node_modules/
 packages/*/dist/
 *.tsbuildinfo
 .vitest/
+
+# готовые сборки — не часть репозитория
+release/
+*.tgz
