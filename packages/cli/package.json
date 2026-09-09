@@ -31,14 +31,16 @@
     "fb2read": "./dist/fb2read.mjs"
   },
   "files": [
-    "dist",
-    "README.md"
+    "dist/fb2read.mjs",
+    "README.md",
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "prepack": "node -e \"require('node:fs').copyFileSync('../../LICENSE','LICENSE')\""
   },
   "devDependencies": {
     "@fb2read/core": "workspace:*",
