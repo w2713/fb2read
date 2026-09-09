@@ -38,11 +38,19 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - uses: oven-sh/setup-bun@v2
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter fb2read build
+      # Собирается всё: сквозная проверка синхронизации запускает и сервер.
+      - run: pnpm build
       - name: Проверить сборку под Bun
-        run: bun packages/cli/dist/fb2read.mjs --version
+        run: |
+          bun packages/cli/dist/fb2read.mjs --version
+          bun packages/server/dist/fb2read-server.mjs --version
       - name: Проверить установщик на поддельном выпуске
         run: ./scripts/test-install.sh
+      # Синхронизация проверяется целиком: два устройства, настоящий сервер,
+      # собранные бинарники. Модульные тесты этого не покрывают — они не
+      # видят, как части складываются.
+      - name: Проверить синхронизацию двух устройств
+        run: ./scripts/test-sync.sh
       - name: Проверить скрипты оболочки
         run: |
           sudo apt-get install -y shellcheck

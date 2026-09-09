@@ -19,6 +19,13 @@ export interface ChooserEntry {
   title: string;
   author: string;
   percent: number | null;
+  /**
+   * Отпечаток книги, которая лежит только на сервере.
+   *
+   * Такие показаны облаком вместо процента и скачиваются по Enter. Путь у
+   * них пустой до тех пор, пока книга не окажется на диске.
+   */
+  remote?: string;
 }
 
 /** Дочитанной считается книга, пройденная почти до конца. */
@@ -28,6 +35,10 @@ export class Chooser implements View {
   needsFullRedraw = false;
   /** Путь к выбранной книге; null, если читатель вышел. */
   picked: string | null = null;
+  /** Сама выбранная запись: у книги с сервера пути ещё нет. */
+  pickedEntry: ChooserEntry | null = null;
+  /** Строка вместо подсказки: например, «скачиваю…» во время загрузки. */
+  notice = "";
 
   private cursor = 0;
   private top = 0;
@@ -109,7 +120,12 @@ export class Chooser implements View {
       const index = this.top + i;
       if (index >= this.entries.length) break;
       const entry = this.entries[index]!;
-      const mark = entry.percent === null ? "  · " : `${String(entry.percent).padStart(3)}%`;
+      // Облако вместо процента: книга есть на сервере, но не здесь.
+      const mark = entry.remote
+        ? "  ☁ "
+        : entry.percent === null
+          ? "  · "
+          : `${String(entry.percent).padStart(3)}%`;
       const name = entry.author ? `${entry.author} — ${entry.title}` : entry.title;
       let row = cutToWidth(` ${mark}  ${name}`, this.columns - 2);
       // Дополняем пробелами: у выбранной строки фон обращён, и без этого
@@ -118,7 +134,7 @@ export class Chooser implements View {
       screen.put(i + 1, 0, row, this.attrFor(entry, index === this.cursor), this.columns - 1);
     }
 
-    const hint = " Enter или клик — читать,  q — выход ";
+    const hint = this.notice || " Enter или клик — читать,  q — выход ";
     screen.put(
       this.rows - 1,
       0,
@@ -210,6 +226,7 @@ export class Chooser implements View {
     const entry = this.entries[index];
     if (!entry) return;
     this.picked = entry.path;
+    this.pickedEntry = entry;
     this.finished = true;
   }
 }

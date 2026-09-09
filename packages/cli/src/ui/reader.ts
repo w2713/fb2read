@@ -58,6 +58,14 @@ export interface ReaderOptions {
   keys?: Record<string, string>;
   bookmarks?: Bookmark[];
   path?: string;
+  /**
+   * Что сказать в строке состояния сразу при открытии.
+   *
+   * Сюда попадает итог синхронизации: она случается до того, как книга
+   * показана, и её сообщению больше негде появиться — на экран, который
+   * тут же сменится, писать бессмысленно.
+   */
+  notice?: string;
   /** Выключен ли показ картинок: об этом надо сказать до выбора, а не после. */
   imagesOff?: boolean;
   /** Показ картинки: слой терминала знает, каким протоколом рисовать. */
@@ -119,13 +127,15 @@ export class Reader {
     this.mouse = options.mouse;
     this.theme = new Theme(THEME_ORDER.includes(options.theme) ? options.theme : "auto");
     this.bookmarks = options.bookmarks ?? [];
-    this.markedBlocks = new Set(this.bookmarks.map((m) => m.block));
+    this.markedBlocks = new Set(this.liveMarks.map((m) => m.block));
     const built = buildKeymap(options.keys ?? {});
     this.keymap = built.keymap;
     this.bindings = built.bindings;
+    // Правки в файле важнее: о них читатель должен узнать в любом случае,
+    // а итог синхронизации подождёт следующего нажатия.
     this.message = this.book.repairs.length
       ? "файл открыт с исправлениями, подробности по i"
-      : "";
+      : (options.notice ?? "");
     this.top = 0;
     this.pendingStart = options.startBlock;
   }
@@ -616,7 +626,7 @@ export class Reader {
       `Колонок  : ${this.effColumns}` +
         (this.columns === 2 && this.effColumns === 1 ? " (запрошено 2, окно узкое)" : ""),
       `Глав     : ${b.toc.length}`,
-      `Закладок : ${this.bookmarks.length}`,
+      `Закладок : ${this.liveMarks.length}`,
       ...(b.repairs.length ? ["", ...b.repairs.map((n) => `Правка   : ${n}`)] : []),
     ];
     this.openPopup({ title: "О книге", items, onDone: () => {} });
@@ -772,36 +782,57 @@ export class Reader {
 
   // --- закладки ---------------------------------------------------------
 
+  /**
+   * Живые закладки: без надгробий.
+   *
+   * Снятая закладка не выбрасывается, а помечается снятой, — иначе при
+   * синхронизации она вернулась бы с другого устройства, которое о снятии не
+   * знает. Читателю все эти пометки видеть незачем, поэтому список для
+   * экрана всегда идёт через этот отбор.
+   */
+  private get liveMarks(): Bookmark[] {
+    return this.bookmarks.filter((m) => !m.deleted);
+  }
+
+  /** Снимает закладку, оставляя след: когда именно её сняли. */
+  private removeBookmark(block: number): void {
+    const at = Date.now() / 1000;
+    this.bookmarks = this.bookmarks.map((m) => (m.block === block ? { block, at, deleted: true } : m));
+  }
+
   private addBookmark(): void {
     const block = this.currentBlock();
-    if (this.bookmarks.some((m) => m.block === block)) {
-      this.bookmarks = this.bookmarks.filter((m) => m.block !== block);
+    if (this.liveMarks.some((m) => m.block === block)) {
+      this.removeBookmark(block);
       this.message = "закладка снята";
     } else {
+      // Надгробие на этом же блоке заменяется новой закладкой: поставить
+      // заново — обычное дело.
+      this.bookmarks = this.bookmarks.filter((m) => m.block !== block);
       this.bookmarks.push({
         block,
         name: bookmarkLabel(this.book.blocks, block),
         percent: progressPercent(block, this.book.blocks.length) ?? 0,
         at: Date.now() / 1000,
       });
-      this.message = `закладка поставлена (${this.bookmarks.length} всего)`;
+      this.message = `закладка поставлена (${this.liveMarks.length} всего)`;
     }
     this.storeBookmarks();
   }
 
   private storeBookmarks(): void {
-    this.markedBlocks = new Set(this.bookmarks.map((m) => m.block));
+    this.markedBlocks = new Set(this.liveMarks.map((m) => m.block));
     this.options.saveBookmarks?.(this.bookmarks);
   }
 
   private showBookmarks(): void {
-    if (!this.bookmarks.length) {
+    if (!this.liveMarks.length) {
       this.message = "закладок нет: поставить — M";
       return;
     }
     // Порядок добавления, а не по книге: так закладка, которую только что
     // поставили, остаётся там, где её оставил читатель.
-    const marks = [...this.bookmarks];
+    const marks = this.liveMarks;
     const items = marks.map((m) => `${String(m.percent ?? 0).padStart(3)}%  ${m.name ?? ""}`);
     this.openPopup({
       title: "Закладки",
@@ -813,9 +844,9 @@ export class Reader {
         if (!result) return;
         const mark = marks[result.index]!;
         if ("action" in result && result.action === "d") {
-          this.bookmarks = this.bookmarks.filter((m) => m !== mark);
+          this.removeBookmark(mark.block);
           this.storeBookmarks();
-          if (!this.bookmarks.length) {
+          if (!this.liveMarks.length) {
             this.message = "закладок больше нет";
             return;
           }
@@ -826,7 +857,7 @@ export class Reader {
         }
         if ("action" in result && result.action === "e") {
           this.message =
-            this.options.exportBookmarks?.(this.bookmarks) ?? "выгрузка закладок недоступна";
+            this.options.exportBookmarks?.(this.liveMarks) ?? "выгрузка закладок недоступна";
           return;
         }
         this.goToBlock(mark.block);

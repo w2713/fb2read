@@ -19,6 +19,7 @@ if [ $# -gt 0 ]; then
 fi
 
 BUNDLE="$ROOT/packages/cli/dist/fb2read.mjs"
+SERVER_BUNDLE="$ROOT/packages/server/dist/fb2read-server.mjs"
 
 # Слева — как цель называется у нас (и в имени файла), справа — у Bun.
 # Отдельной сборки под Android нет: Bun там не запускается, потому что его
@@ -37,6 +38,18 @@ darwin-arm64 bun-darwin-arm64
 EOF
 }
 
+# Сервер синхронизации собирается только под Linux: его ставят на машину,
+# которая работает круглосуточно, а это почти всегда Linux. Кому нужно
+# иначе — есть пакет в npm и образ Docker, оба без привязки к системе.
+server_targets() {
+    cat <<'EOF'
+server-linux-x64 bun-linux-x64
+server-linux-arm64 bun-linux-arm64
+server-linux-x64-musl bun-linux-x64-musl
+server-linux-arm64-musl bun-linux-arm64-musl
+EOF
+}
+
 if ! command -v bun >/dev/null 2>&1; then
     echo "нужен bun: https://bun.com" >&2
     exit 1
@@ -47,6 +60,17 @@ if [ ! -f "$BUNDLE" ]; then
     exit 1
 fi
 
+# Сервер нужен только тем целям, что начинаются на server-; проверяем лениво,
+# чтобы сборка одной читалки не требовала лишнего.
+case " $* " in
+    *" server-"*)
+        if [ ! -f "$SERVER_BUNDLE" ]; then
+            echo "нет бандла $SERVER_BUNDLE — запустите pnpm build" >&2
+            exit 1
+        fi
+        ;;
+esac
+
 mkdir -p "$OUT"
 wanted=$*
 
@@ -54,13 +78,14 @@ build_one() {
     name=$1
     target=$2
     case "$name" in
-        *windows*) binary="fb2read.exe" ;;
-        *) binary="fb2read" ;;
+        server-*) source_bundle=$SERVER_BUNDLE; binary="fb2read-server" ;;
+        *windows*) source_bundle=$BUNDLE; binary="fb2read.exe" ;;
+        *) source_bundle=$BUNDLE; binary="fb2read" ;;
     esac
 
     echo "собираю $name"
     work=$(mktemp -d)
-    bun build --compile --minify --target="$target" "$BUNDLE" \
+    bun build --compile --minify --target="$target" "$source_bundle" \
         --outfile "$work/$binary" >/dev/null
 
     # macOS отказывается запускать неподписанное на Apple Silicon. Подпись
@@ -87,7 +112,7 @@ build_one() {
     rm -rf "$work"
 }
 
-all_targets | while read -r name target; do
+{ all_targets; server_targets; } | while read -r name target; do
     [ -n "$name" ] || continue
     if [ -n "$wanted" ]; then
         case " $wanted " in

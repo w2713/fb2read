@@ -1,0 +1,26 @@
+{
+  "name": "fb2read-server",
+  "version": "0.12.0",
+  "type": "module",
+  "description": "Сервер синхронизации книг и позиций чтения для fb2read",
+  "license": "MIT",
+  "keywords": ["fb2", "epub", "sync", "server", "fb2read"],
+  "homepage": "https://github.com/w2713/fb2read#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/w2713/fb2read.git",
+    "directory": "packages/server"
+  },
+  "bugs": { "url": "https://github.com/w2713/fb2read/issues" },
+  "engines": { "node": ">=20" },
+  "bin": { "fb2read-server": "./dist/fb2read-server.mjs" },
+  "files": ["dist/fb2read-server.mjs", "README.md", "LICENSE"],
+  "publishConfig": { "access": "public" },
+  "scripts": {
+    "build": "tsup",
+    "prepack": "node -e \"require('node:fs').copyFileSync('../../LICENSE','LICENSE')\""
+  },
+  "devDependencies": {
+    "@fb2read/core": "workspace:*"
+  }
+}

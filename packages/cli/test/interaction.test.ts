@@ -302,7 +302,27 @@ describe("закладки", () => {
     await ui.press("d");
     // Удалять по одной удобнее, чем каждый раз заходить в список заново.
     expect(ui.terminal.text()).toContain("Закладки");
-    expect(ui.reader.bookmarks).toHaveLength(1);
+    expect(ui.reader.bookmarks.filter((m) => !m.deleted)).toHaveLength(1);
+  });
+
+  it("снятая закладка остаётся надгробием, а не пропадает из записи", async () => {
+    // Ради синхронизации: устройство, которое о снятии не знает, иначе
+    // прислало бы закладку обратно, и она бы воскресла.
+    const ui = await open();
+    await ui.press("M", "'", "d");
+    const marks = ui.reader.bookmarks;
+    expect(marks.filter((m) => !m.deleted)).toHaveLength(0);
+    expect(marks.filter((m) => m.deleted)).toHaveLength(1);
+    expect(marks[0]!.at).toBeGreaterThan(0);
+  });
+
+  it("поставленная заново закладка вытесняет надгробие", async () => {
+    const ui = await open();
+    await ui.press("M", "'", "d");
+    await ui.press("M");
+    const marks = ui.reader.bookmarks;
+    expect(marks).toHaveLength(1);
+    expect(marks[0]!.deleted).toBeUndefined();
   });
 
   it("e выгружает закладки и говорит куда", async () => {

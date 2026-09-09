@@ -56,10 +56,17 @@ export async function recentBooks(store: StateStore): Promise<RecentEntry[]> {
   return store.recent();
 }
 
-/** Список книг текстом — когда вывод идёт в файл или конвейер. */
-export function libraryLines(entries: readonly LibraryEntry[]): string[] {
+/**
+ * Список книг текстом — когда вывод идёт в файл или конвейер.
+ *
+ * Принимает лишь то, что печатает: сюда попадают и записи каталога, и книги
+ * с сервера, у которых пути на этом устройстве ещё нет.
+ */
+export function libraryLines(
+  entries: readonly { path: string; title: string; percent: number | null }[],
+): string[] {
   return entries.map((e) => {
     const percent = e.percent === null ? "-" : String(e.percent);
-    return `${percent.padStart(4)}  ${e.title}  (${e.path})`;
+    return `${percent.padStart(4)}  ${e.title}  (${e.path || "на сервере"})`;
   });
 }
