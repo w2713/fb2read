@@ -86,5 +86,28 @@ grep -q "не сошлась" "$WORK/log2" || fail "установщик не о
 [ -e "$WORK/home2/.local/bin/fb2read" ] && fail "после отказа что-то всё же установилось"
 echo "подменённый архив: отвергнут"
 
+# --- установщик для Windows ------------------------------------------------
+
+# Windows PowerShell 5.1 при `irm ... | iex` декодирует скачанный скрипт как
+# латиницу: сервер не объявляет кодировку. Любое русское слово в выводе
+# превратилось бы в мусор вида «ÑÐºÐ°ÑÐ¸Ð²Ð°Ñ». Поэтому весь вывод
+# install.ps1 обязан быть латиницей, и это надо стеречь.
+python3 - "$ROOT/scripts/install.ps1" <<'PY' || fail "в выводе install.ps1 есть символы вне латиницы"
+import sys
+
+path = sys.argv[1]
+data = open(path, "rb").read()
+shown = [
+    line
+    for line in data.decode("utf-8").split("\n")
+    if "Write-Host" in line or line.strip().startswith("Fail ") or " Fail " in line
+]
+bad = [line for line in shown if any(ord(ch) > 127 for ch in line)]
+for line in bad:
+    print("  не латиница:", line.strip()[:70])
+sys.exit(1 if bad else 0)
+PY
+echo "вывод install.ps1: только латиница, искажений в PowerShell не будет"
+
 echo
 echo "установщик проверен"

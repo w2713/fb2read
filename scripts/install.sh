@@ -98,8 +98,17 @@ work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM
 
 say "скачиваю $archive"
-fetch "$BASE/$archive" "$work/$archive" ||
-    die "не удалось скачать $BASE/$archive"
+if ! fetch "$BASE/$archive" "$work/$archive"; then
+    # Чаще всего дело не в сети, а в том, что релиза ещё нет. Общее
+    # «не удалось скачать» тут ничего не объясняет.
+    printf '\n' >&2
+    printf 'fb2read: не удалось скачать %s\n\n' "$BASE/$archive" >&2
+    printf 'Скорее всего, релиз ещё не выпущен.\n' >&2
+    printf 'Посмотрите https://github.com/%s/releases\n\n' "$REPO" >&2
+    printf 'Пока можно поставить из npm (нужен Node.js 20 или новее):\n' >&2
+    printf '  npm install -g fb2read\n' >&2
+    exit 1
+fi
 
 if fetch "$BASE/SHA256SUMS" "$work/SHA256SUMS" 2>/dev/null; then
     # Считаем сумму тем, что есть: на macOS свой инструмент.

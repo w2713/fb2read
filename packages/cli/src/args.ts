@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { IMAGE_BACKENDS, THEME_ORDER, type ImageBackend, type Theme } from "@fb2read/core";
 
 export const APP = "fb2read";
-export const VERSION = "0.11.0";
+export const VERSION = "0.12.0";
 
 /** Что разобрали из командной строки. */
 export interface Args {
