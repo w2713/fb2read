@@ -1,0 +1,15 @@
+{
+  "name": "@fb2read/core",
+  "version": "0.11.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": { "build": "tsc -b" },
+  "dependencies": {
+    "@rgrove/parse-xml": "^5.0.0",
+    "fflate": "^0.8.2",
+    "get-east-asian-width": "^1.3.0"
+  }
+}

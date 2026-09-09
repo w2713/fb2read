@@ -1,0 +1,13 @@
+{
+  "name": "fb2read",
+  "version": "0.11.0",
+  "type": "module",
+  "description": "Читалка книг FB2 и EPUB для терминала",
+  "license": "MIT",
+  "engines": { "node": ">=20" },
+  "bin": { "fb2read": "./dist/fb2read.mjs" },
+  "files": ["dist"],
+  "scripts": { "build": "tsup" },
+  "dependencies": {},
+  "devDependencies": { "@fb2read/core": "workspace:*" }
+}

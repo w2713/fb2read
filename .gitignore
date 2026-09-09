@@ -10,3 +10,9 @@ dist/
 *.fb2.zip
 *.fbz
 *.epub
+
+# TypeScript
+node_modules/
+packages/*/dist/
+*.tsbuildinfo
+.vitest/
