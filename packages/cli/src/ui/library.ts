@@ -48,6 +48,21 @@ export interface LibraryOptions {
    * платформы, поэтому сюда она приходит снаружи, а список о ней не знает.
    */
   download?: (hash: string, name: string) => Promise<string>;
+  /** Версия читалки для заголовка справки. */
+  version?: string;
+  /**
+   * Синхронизация книги, открытой из списка.
+   *
+   * Книга здесь становится известна только после выбора, поэтому вместо
+   * готового обработчика библиотека получает способ его собрать.
+   */
+  syncNow?: (
+    key: string,
+    meta: { hash: string; title: string; author: string; total: number },
+    path: string,
+  ) => (block: number, bookmarks: Bookmark[]) => Promise<{ text: string; bookmarks?: Bookmark[] }>;
+  /** Обмен состоянием всех книг по клавише в списке. */
+  syncAll?: () => Promise<{ text: string; entries?: ChooserEntry[] }>;
 }
 
 /**
@@ -67,7 +82,10 @@ export async function runLibrary(
 
   try {
     for (;;) {
-      const chooser = new Chooser(entries, new Theme(prefs.theme), prefs.mouse);
+      const chooser = new Chooser(entries, new Theme(prefs.theme), prefs.mouse, {
+        ...(options.syncAll ? { onSync: options.syncAll } : {}),
+        requestPaint: () => session.paint(),
+      });
       await session.show(chooser);
       let path = chooser.picked;
       if (path === null) return prefs;
@@ -121,6 +139,21 @@ export async function runLibrary(
         mouse: prefs.mouse,
         keys: prefs.keys,
         bookmarks,
+        ...(options.version ? { version: options.version } : {}),
+        ...(options.syncNow
+          ? {
+              syncNow: options.syncNow(
+                key,
+                {
+                  hash: book.hash,
+                  title: book.title,
+                  author: book.author,
+                  total: book.blocks.length,
+                },
+                full,
+              ),
+            }
+          : {}),
         saveBookmarks: (marks) => {
           void store.saveBookmarks(key, marks, {
             title: book.title,

@@ -30,6 +30,8 @@ import {
   cmdSync,
   downloadBook,
   remoteOnly,
+  syncAllQuiet,
+  syncOnDemand,
   syncOne,
   syncSettings,
 } from "./sync.js";
@@ -166,7 +168,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       fail("для --dump/--toc/--info нужен файл книги");
       return 2;
     }
-    const entries: ChooserEntry[] = args.file
+    const found: ChooserEntry[] = args.file
       ? await scanDir(args.file, store)
       : (await store.recent()).map((e) => ({ ...e }));
 
@@ -174,10 +176,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // по Enter. Сервер спрашивается недолго и без шума: если он недоступен,
     // список появляется сразу и просто без облаков.
     const librarySync = syncSettings(config.sync);
-    if (librarySync) {
+
+    /**
+     * Дописывает к списку книги, которые есть только на сервере.
+     *
+     * Всегда возвращает новый массив: тот, что пришёл, может лежать у
+     * вызывающего, и менять его на месте — верный способ обнулить список.
+     */
+    const addRemote = async (list: ChooserEntry[]): Promise<ChooserEntry[]> => {
+      const out = list.filter((e) => !e.remote);
+      if (!librarySync) return out;
       const have = new Set((await store.syncableStates(librarySync.device)).map((s) => s.hash));
       for (const book of await remoteOnly(librarySync, have)) {
-        entries.push({
+        out.push({
           path: "",
           title: book.title,
           author: book.author,
@@ -185,7 +196,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
           remote: book.hash,
         });
       }
-    }
+      return out;
+    };
+
+    const entries = await addRemote(found);
 
     if (!entries.length) {
       fail(`в ${args.file ?? "истории чтения"} книг не нашлось`);
@@ -201,8 +215,32 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       store,
       fromStart: args.fromStart,
       exportBookmarks,
+      version: VERSION,
       ...(librarySync
-        ? { download: (hash: string, name: string) => downloadBook(librarySync, store, hash, name) }
+        ? {
+            download: (hash: string, name: string) => downloadBook(librarySync, store, hash, name),
+            syncNow:
+              (
+                key: string,
+                meta: { hash: string; title: string; author: string; total: number },
+                path: string,
+              ) =>
+              (block: number, marks: Bookmark[]) =>
+                syncOnDemand(librarySync, store, key, meta, path, block, marks),
+            syncAll: async () => {
+              try {
+                const text = await syncAllQuiet(librarySync, store);
+                // Прогресс мог измениться, и книги на сервере тоже: список
+                // пересобирается целиком, а не подправляется на месте.
+                const fresh = args.file
+                  ? await scanDir(args.file, store)
+                  : (await store.recent()).map((e) => ({ ...e }));
+                return { text, entries: await addRemote(fresh) };
+              } catch (e) {
+                return { text: `не вышло: ${(e as Error).message}` };
+              }
+            },
+          }
         : {}),
     });
     await store.saveSettings({
@@ -299,6 +337,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       keys: prefs.keys,
       bookmarks,
       notice: syncNote,
+      version: VERSION,
+      syncNow: sync
+        ? (block, marks) =>
+            syncOnDemand(
+              sync,
+              store,
+              key,
+              {
+                hash: book.hash,
+                title: book.title,
+                author: book.author,
+                total: book.blocks.length,
+              },
+              path,
+              block,
+              marks,
+            )
+        : undefined,
       saveBookmarks: (marks) => {
         void store.saveBookmarks(key, marks, {
           title: book.title,

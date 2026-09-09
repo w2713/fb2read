@@ -52,6 +52,16 @@ export class Chooser implements View {
     private entries: ChooserEntry[],
     private readonly theme: Theme,
     readonly mouse: boolean,
+    /**
+     * Синхронизация по клавише и просьба перерисовать экран.
+     *
+     * Обмен идёт по сети и заканчивается когда-то потом, а список сам об
+     * этом не узнает, — отсюда и просьба перерисовать.
+     */
+    private readonly hooks: {
+      onSync?: () => Promise<{ text: string; entries?: ChooserEntry[] }>;
+      requestPaint?: () => void;
+    } = {},
   ) {}
 
   get done(): boolean {
@@ -134,7 +144,11 @@ export class Chooser implements View {
       screen.put(i + 1, 0, row, this.attrFor(entry, index === this.cursor), this.columns - 1);
     }
 
-    const hint = this.notice || " Enter или клик — читать,  q — выход ";
+    const hint =
+      this.notice ||
+      (this.hooks.onSync
+        ? " Enter — читать,  S — синхронизировать,  q — выход "
+        : " Enter или клик — читать,  q — выход ");
     screen.put(
       this.rows - 1,
       0,
@@ -186,6 +200,10 @@ export class Chooser implements View {
       this.choose(this.cursor);
       return;
     }
+    if (name === "S") {
+      void this.runSync();
+      return;
+    }
 
     const last = this.entries.length - 1;
     if (name === "down" || name === "j") this.cursor = Math.min(this.cursor + 1, last);
@@ -220,6 +238,27 @@ export class Chooser implements View {
       }
     }
     this.clamp();
+  }
+
+  /** Обмен с сервером и обновление списка. */
+  private async runSync(): Promise<void> {
+    if (!this.hooks.onSync) {
+      this.notice = " синхронизация не настроена: раздел [sync] в конфиге ";
+      this.hooks.requestPaint?.();
+      return;
+    }
+    this.notice = " синхронизирую… ";
+    this.hooks.requestPaint?.();
+    const got = await this.hooks.onSync();
+    // Список мог измениться: прогресс подтянулся, а книги с сервера,
+    // которых тут нет, могли появиться или пропасть.
+    if (got.entries) {
+      this.entries = got.entries;
+      this.clamp();
+    }
+    this.notice = ` ${got.text} `;
+    this.needsFullRedraw = true;
+    this.hooks.requestPaint?.();
   }
 
   private choose(index: number): void {

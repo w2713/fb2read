@@ -56,6 +56,7 @@ export const ACTIONS: readonly ActionSpec[] = [
   { action: "theme", text: "тема: авто, ночь, сепия, день", keys: ["c"] },
   { action: "mouse", text: "отпустить мышь и вернуть захват", keys: ["m"] },
   { action: "info", text: "сведения о книге", keys: ["i"] },
+  { action: "sync", text: "синхронизировать с сервером", keys: ["S"] },
   { action: "redraw", text: "перерисовать экран", keys: ["ctrl-l"] },
   { action: "help", text: "эта справка", keys: ["?", "h"] },
   { action: "quit", text: "выход (позиция сохраняется)", keys: ["q", "Q"] },
