@@ -7,7 +7,7 @@
  * получила бы от терминала пользователя.
  */
 
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
@@ -49,6 +49,7 @@ afterAll(() => {
 async function session(
   steps: Array<string | number>,
   size: { rows: number; cols: number } = { rows: 24, cols: 100 },
+  extraEnv: Record<string, string> = {},
 ): Promise<{ output: string; code: number }> {
   const term = pty!.spawn(process.execPath, [CLI, book], {
     name: "xterm-256color",
@@ -60,6 +61,7 @@ async function session(
       TERM: "xterm-256color",
       XDG_DATA_HOME: join(dir, "data"),
       XDG_CONFIG_HOME: join(dir, "config"),
+      ...extraEnv,
     },
   });
 
@@ -141,5 +143,71 @@ describe.skipIf(!runnable)("настоящий терминал", () => {
   it("показывает оглавление и уходит по нему в главу", async () => {
     const { output } = await session(["t", "j", "\r", "q"]);
     expect(output).toContain("Оглавление");
+  });
+
+  it("кириллица доходит до экрана и без UTF-8 локали", async () => {
+    // LC_ALL=C — обычное дело в ssh, docker и cron; текст не должен
+    // превращаться в вопросительные знаки.
+    const { output } = await session(["q"], { rows: 24, cols: 100 }, { LC_ALL: "C", LANG: "C" });
+    expect(output).toContain("Проверка читалки");
+  });
+
+  it("тема и интервал переживают выход и следующий запуск", async () => {
+    await session(["c", "s", "q"]);
+    const state = join(dir, "data", "fb2read", "positions.json");
+    const settings = (
+      JSON.parse(readFileSync(state, "utf-8")) as Record<string, Record<string, unknown>>
+    )["__settings__"];
+    expect(settings).toMatchObject({ spacing: 2 });
+    expect(typeof settings!["theme"]).toBe("string");
+
+    // Следующий запуск открывает книгу уже с этими настройками.
+    const again = await session(["q"]);
+    expect(again.code).toBe(0);
+  });
+
+  it("книга открывается на сохранённом месте", async () => {
+    await session([" ", " ", " ", "q"]);
+    const state = join(dir, "data", "fb2read", "positions.json");
+    const data = JSON.parse(readFileSync(state, "utf-8")) as Record<string, { block?: number }>;
+    const saved = Object.entries(data).find(([key]) => key !== "__settings__")?.[1];
+    expect(saved?.block).toBeGreaterThan(0);
+
+    // Второй запуск должен показать тот же кусок книги, а не начало.
+    const { output } = await session(["q"]);
+    expect(output).not.toContain("  0% ");
+  });
+});
+
+describe.skipIf(!runnable)("библиотека в настоящем терминале", () => {
+  it("открывает список каталога, читает книгу и возвращается", async () => {
+    const shelf = join(dir, "полка");
+    mkdirSync(shelf, { recursive: true });
+    writeFileSync(join(shelf, "книга.fb2"), encodeLegacy(SAMPLE, "cp1251"));
+
+    const term = pty!.spawn(process.execPath, [CLI, shelf], {
+      name: "xterm-256color",
+      cols: 90,
+      rows: 20,
+      cwd: dir,
+      env: { ...process.env, XDG_DATA_HOME: join(dir, "libdata") },
+    });
+    let output = "";
+    term.onData((d) => {
+      output += d;
+    });
+    const exited = new Promise<number>((done) => term.onExit(({ exitCode }) => done(exitCode)));
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    await wait(500);
+    expect(output).toContain("Библиотека");
+    term.write("\r"); // открыть книгу
+    await wait(500);
+    expect(output).toContain("Проверка читалки");
+    term.write("q"); // назад к списку
+    await wait(500);
+    expect(output.lastIndexOf("Библиотека")).toBeGreaterThan(output.indexOf("Проверка читалки"));
+    term.write("q"); // выйти совсем
+    expect(await exited).toBe(0);
   });
 });

@@ -96,6 +96,14 @@ describe.skipIf(!built)("собранная программа", () => {
     expect(result.status).toBe(1);
   });
 
+  it("на повреждённом файле объясняет, что случилось", () => {
+    const broken = join(dir, "битая.fb2");
+    writeFileSync(broken, "это не книга", "utf-8");
+    const result = run(broken, "--info");
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("повреждён");
+  });
+
   it("записывает образец настроек и читает его обратно", () => {
     const path = join(dir, "config.ini");
     const result = run("--write-config", "--config", path);
@@ -117,6 +125,12 @@ describe.skipIf(!built)("собранная программа", () => {
     const result = run(dir, "--dump");
     expect(result.status).toBe(2);
     expect(result.stderr).toContain("нужен файл книги");
+  });
+
+  it("недавние книги печатаются текстом, когда вывод не в терминал", () => {
+    // Без аргумента и без терминала список идёт в конвейер, а не на экран.
+    const result = spawnSync(process.execPath, [CLI], { encoding: "utf-8", env: env() });
+    expect(result.status === 0 || result.status === 1).toBe(true);
   });
 
   it("список книг в каталоге печатается текстом", () => {

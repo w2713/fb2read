@@ -7,7 +7,7 @@
  */
 
 import { beforeEach, describe, expect, it } from "vitest";
-import { harness, type Harness } from "./harness.js";
+import { harness, type ReaderHarness } from "./harness.js";
 import { sampleBook, wideBook } from "./books.js";
 
 const OPTIONS = {
@@ -23,7 +23,7 @@ async function open(size?: { rows?: number; columns?: number }, extra: object = 
   return harness({ book: await sampleBook(), ...OPTIONS, ...extra }, size);
 }
 
-let ui: Harness;
+let ui: ReaderHarness;
 
 describe("первый кадр", () => {
   beforeEach(async () => {
@@ -128,6 +128,33 @@ describe("книжный разворот", () => {
     expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("окно шире");
   });
 
+  it("обе страницы разворота показывают подряд идущие строки книги", async () => {
+    ui = await open({ columns: 120, rows: 20 }, { columns: 2 });
+    const height = ui.terminal.rows - 2;
+    const left: string[] = [];
+    const right: string[] = [];
+    for (let row = 1; row <= height; row++) {
+      const line = ui.terminal.line(row);
+      const middle = line.indexOf("│");
+      left.push(line.slice(0, middle).trimEnd());
+      right.push(line.slice(middle + 1).trimEnd());
+    }
+    // Правая страница продолжает левую, а не повторяет её.
+    expect(right.some((l) => l.trim())).toBe(true);
+    expect(right.join("\n")).not.toBe(left.join("\n"));
+  });
+
+  it("пробел в развороте листает обе страницы разом", async () => {
+    ui = await open({ columns: 120, rows: 20 }, { columns: 2 });
+    const firstRight = ui.terminal.line(1).split("│")[1] ?? "";
+    await ui.press(" ");
+    const afterLeft = ui.terminal.line(1).split("│")[0] ?? "";
+    // Левая страница после перелистывания — не то, что было справа до него:
+    // разворот сменился целиком, а не сдвинулся на страницу.
+    expect(afterLeft.trim()).not.toBe(firstRight.trim());
+    expect(afterLeft.trim()).not.toBe("");
+  });
+
   it("клавиша 2 включает разворот, 1 возвращает одну колонку", async () => {
     ui = await open({ columns: 120 });
     await ui.press("2");
@@ -150,10 +177,10 @@ describe("изменение размера окна", () => {
   it("после сужения и возврата книга остаётся на том же месте", async () => {
     ui = await open({ columns: 100 });
     await ui.press("]");
-    const chapter = ui.session.reader.currentBlock();
+    const chapter = ui.reader.currentBlock();
     await ui.resize(24, 50);
     await ui.resize(24, 100);
-    expect(ui.session.reader.currentBlock()).toBe(chapter);
+    expect(ui.reader.currentBlock()).toBe(chapter);
   });
 });
 
@@ -191,7 +218,7 @@ describe("выход", () => {
     ui = await open();
     await ui.press("q");
     await new Promise((resolve) => setImmediate(resolve));
-    expect(ui.session.reader.done).toBe(true);
+    expect(ui.reader.done).toBe(true);
     expect(ui.terminal.raw).toContain("\x1b[?1049l");
     expect(ui.terminal.raw).toContain("\x1b[?25h");
   });

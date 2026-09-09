@@ -1,133 +1,123 @@
 /**
- * Сеанс чтения: связывает читалку с терминалом.
+ * Сеанс: связывает экраны с настоящим терминалом.
  *
- * Здесь и только здесь читалка встречается с настоящим вводом-выводом.
- * Сама она о терминале не знает, поэтому тесты подставляют сюда свою
- * реализацию и проверяют всё до последней ячейки экрана.
+ * Здесь и только здесь программа встречается с вводом-выводом. Сами экраны о
+ * терминале не знают, поэтому тесты подставляют сюда свою реализацию и
+ * проверяют всё до последней ячейки.
+ *
+ * Сеанс живёт дольше одного экрана: в библиотеке за ним идут список, книга и
+ * снова список. Обработчики событий поэтому ставятся один раз и всегда
+ * обращаются к текущему экрану — иначе они накапливались бы с каждой книгой.
  */
 
-import {
-  CLEAR,
-  CURSOR_HIDE,
-  CURSOR_SHOW,
-  moveTo,
-} from "../term/ansi.js";
+import { CLEAR, CURSOR_HIDE, CURSOR_SHOW, moveTo } from "../term/ansi.js";
 import type { Terminal } from "../term/terminal.js";
 import { Screen } from "../term/screen.js";
-import type { Block, Book, Bookmark, ImageBackend } from "@fb2read/core";
-import { Reader, type ReaderOptions } from "./reader.js";
-import { detectBackend, renderImage } from "./images.js";
+import type { View } from "./view.js";
 
-export interface SessionOptions extends Omit<ReaderOptions, "showImage"> {
-  images: ImageBackend;
-}
-
-/** Читает книгу, пока пользователь не выйдет. */
 export class Session {
-  readonly reader: Reader;
-  private screen: Screen;
-  private backend: string;
-  private waitingKey: ((name: string) => void) | null = null;
+  private readonly screen: Screen;
+  private view: View | null = null;
+  private finish: (() => void) | null = null;
+  private waitingKey: (() => void) | null = null;
+  private started = false;
 
-  constructor(
-    private readonly terminal: Terminal,
-    options: SessionOptions,
-  ) {
-    this.backend = options.images === "auto" ? detectBackend() : options.images;
+  constructor(readonly terminal: Terminal) {
     this.screen = new Screen(terminal.rows, terminal.columns, terminal.colors);
-    this.reader = new Reader({
-      ...options,
-      showImage: (block) => this.showImage(block),
-    });
-    this.reader.setSize(terminal.rows, terminal.columns);
   }
 
-  /** Ведёт чтение до выхода и возвращает, где читатель остановился. */
-  async run(): Promise<{ block: number; bookmarks: Bookmark[] }> {
-    this.terminal.enterRaw(this.reader.mouse);
+  /** Занимает терминал: полноэкранный режим, сырой ввод, мышь. */
+  begin(mouse: boolean): void {
+    if (this.started) return;
+    this.started = true;
+    this.terminal.enterRaw(mouse);
 
-    const done = new Promise<void>((resolve) => {
-      this.terminal.onInput((event) => {
-        if (this.waitingKey) {
-          // Пока показана картинка, любая клавиша возвращает к тексту.
-          if (event.kind === "key") {
-            const resume = this.waitingKey;
-            this.waitingKey = null;
-            resume(event.name);
-          }
-          return;
+    this.terminal.onInput((event) => {
+      if (this.waitingKey) {
+        // Пока показана картинка, экран ждёт любого нажатия.
+        if (event.kind === "key") {
+          const resume = this.waitingKey;
+          this.waitingKey = null;
+          resume();
         }
-        const mouseWas = this.reader.mouse;
-        if (event.kind === "key") this.reader.key(event.name);
-        else this.reader.mouseEvent(event);
-        if (this.reader.mouse !== mouseWas) this.terminal.setMouse(this.reader.mouse);
-        if (this.reader.done) {
-          resolve();
-          return;
-        }
-        this.paint();
-      });
-
-      this.terminal.onResize(() => {
-        this.screen.resize(this.terminal.rows, this.terminal.columns);
-        this.reader.setSize(this.terminal.rows, this.terminal.columns);
-        this.paint();
-      });
+        return;
+      }
+      const view = this.view;
+      if (!view) return;
+      const mouseWas = view.mouse;
+      if (event.kind === "key") view.key(event.name);
+      else view.mouseEvent(event);
+      if (view.mouse !== mouseWas) this.terminal.setMouse(view.mouse);
+      if (view.done) {
+        this.finish?.();
+        return;
+      }
+      this.paint();
     });
 
-    this.paint();
-    await done;
+    this.terminal.onResize(() => {
+      this.screen.resize(this.terminal.rows, this.terminal.columns);
+      this.view?.setSize(this.terminal.rows, this.terminal.columns);
+      this.paint();
+    });
+  }
+
+  /** Возвращает терминал в исходное состояние. */
+  end(): void {
+    if (!this.started) return;
+    this.started = false;
     this.terminal.leaveRaw();
-    return { block: this.reader.currentBlock(), bookmarks: this.reader.bookmarks };
+  }
+
+  /** Показывает экран и ждёт, пока тот закончит. */
+  async show(view: View): Promise<void> {
+    this.view = view;
+    view.setSize(this.terminal.rows, this.terminal.columns);
+    this.terminal.setMouse(view.mouse);
+    // Прошлый экран оставил на терминале свои ячейки, поэтому первый кадр
+    // нового рисуется целиком.
+    this.screen.invalidate();
+    this.paint();
+    if (view.done) return;
+    await new Promise<void>((resolve) => {
+      this.finish = resolve;
+    });
+    this.finish = null;
   }
 
   /** Рисует кадр. Открыт для тестов, чтобы получить экран без цикла. */
   paint(): void {
-    if (this.reader.needsFullRedraw) {
+    const view = this.view;
+    if (!view) return;
+    if (view.needsFullRedraw) {
       this.screen.invalidate();
-      this.reader.needsFullRedraw = false;
+      view.needsFullRedraw = false;
     }
-    this.reader.draw(this.screen);
+    view.draw(this.screen);
     let frame = this.screen.render();
     // Курсор нужен только в строке поиска: там читатель видит, что набирает.
-    const cursor = this.reader.promptCursor;
+    const cursor = view.promptCursor;
     frame += cursor === null ? CURSOR_HIDE : moveTo(this.screen.rows - 1, cursor) + CURSOR_SHOW;
     this.terminal.write(frame);
   }
 
-  /**
-   * Показывает картинку во весь экран и ждёт клавишу.
-   *
-   * Читалка на это время уходит с экрана целиком: протоколы рисуют поверх
-   * содержимого, и вернуть текст можно только полной перерисовкой.
-   */
-  private async showImage(block: Block): Promise<string> {
-    const book: Book = this.reader.book;
-    const image = await book.imageData(block.src);
-    if (!image) return "не удалось прочитать иллюстрацию";
-    if (!this.backend) {
-      return "этот терминал не умеет картинки — поставьте chafa";
-    }
-
+  /** Отдаёт весь экран под чужой вывод и ждёт нажатия. */
+  async takeOver(draw: (write: (data: string) => void, columns: number, rows: number) => boolean): Promise<boolean> {
     this.terminal.write(CLEAR + moveTo(0, 0));
-    const rows = Math.max(this.terminal.rows - 1, 1);
-    const drawn = renderImage(
-      (s) => this.terminal.write(s),
-      image,
-      this.backend,
+    const drawn = draw(
+      (data) => this.terminal.write(data),
       this.terminal.columns,
-      rows,
+      this.terminal.rows,
     );
     if (!drawn) {
       this.terminal.write(CLEAR + moveTo(0, 0));
-      return "показать картинку не вышло — поставьте chafa";
+      return false;
     }
-
-    this.terminal.write(moveTo(this.terminal.rows - 1, 0) + " любая клавиша — назад ");
     await new Promise<void>((resolve) => {
-      this.waitingKey = () => resolve();
+      this.waitingKey = resolve;
     });
     this.terminal.write(CLEAR);
-    return "";
+    if (this.view) this.view.needsFullRedraw = true;
+    return true;
   }
 }

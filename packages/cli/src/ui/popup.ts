@@ -44,9 +44,13 @@ export class Popup {
 
   draw(screen: Screen, theme: Theme): void {
     const { title, items } = this.options;
+    const hint = this.footer(items.length);
+    // Окно должно вмещать и подсказку: иначе оно предлагает действия,
+    // о которых читатель не может узнать.
     const longest = items.reduce((max, s) => Math.max(max, strWidth(s)), 20);
+    const needed = Math.max(longest, strWidth(hint), strWidth(title) + 4);
     this.height = Math.max(Math.min(items.length + 4, screen.rows - 2), 5);
-    this.width = Math.max(Math.min(longest + 6, screen.columns - 4), 24);
+    this.width = Math.max(Math.min(needed + 6, screen.columns - 4), 24);
     this.originRow = Math.max(Math.floor((screen.rows - this.height) / 2), 0);
     this.originColumn = Math.max(Math.floor((screen.columns - this.width) / 2), 0);
     this.view = this.height - 4;
@@ -89,21 +93,21 @@ export class Popup {
       );
     }
 
-    const scrollable = !this.selectable && items.length > this.view;
-    const footer =
-      this.options.hint ??
-      (this.selectable
-        ? " Enter — перейти, q — закрыть "
-        : scrollable
-          ? " j k — листать, q — закрыть "
-          : " q — закрыть ");
     screen.put(
       this.originRow + this.height - 1,
       this.originColumn + 2,
-      cutToWidth(footer, this.width - 4),
+      cutToWidth(hint, this.width - 4),
       dim,
       this.width - 4,
     );
+  }
+
+  /** Подсказка внизу окна: зависит от того, что в нём можно делать. */
+  private footer(count: number): string {
+    if (this.options.hint) return this.options.hint;
+    if (this.selectable) return " Enter — перейти, q — закрыть ";
+    // Список без выбора листается, только если не поместился целиком.
+    return count > this.view ? " j k — листать, q — закрыть " : " q — закрыть ";
   }
 
   /** Обрабатывает клавишу. Возвращает true, если окно закрылось. */

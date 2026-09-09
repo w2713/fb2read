@@ -8,8 +8,8 @@
 
 import { describe, expect, it } from "vitest";
 import type { Bookmark } from "@fb2read/core";
-import { harness, type Harness } from "./harness.js";
-import { sampleBook } from "./books.js";
+import { harness, type ReaderHarness } from "./harness.js";
+import { epubBook, sampleBook } from "./books.js";
 
 const OPTIONS = {
   width: 60,
@@ -38,16 +38,16 @@ describe("оглавление", () => {
     const ui = await open();
     await ui.press("t", "j", "j", "\r");
     expect(ui.terminal.text()).not.toContain("Оглавление");
-    expect(ui.session.reader.currentBlock()).toBeGreaterThan(0);
+    expect(ui.reader.currentBlock()).toBeGreaterThan(0);
   });
 
   it("q закрывает без перехода", async () => {
     const ui = await open();
-    const before = ui.session.reader.currentBlock();
+    const before = ui.reader.currentBlock();
     await ui.press("t", "q");
     expect(ui.terminal.text()).not.toContain("Оглавление");
-    expect(ui.session.reader.currentBlock()).toBe(before);
-    expect(ui.session.reader.done).toBe(false); // q закрыл окно, а не книгу
+    expect(ui.reader.currentBlock()).toBe(before);
+    expect(ui.reader.done).toBe(false); // q закрыл окно, а не книгу
   });
 
   it("клик мышью выбирает строку", async () => {
@@ -119,6 +119,75 @@ describe("поиск", () => {
     expect(ui.terminal.style(row, at).inverse).toBe(true);
   });
 
+  it("подсвечены все совпадения на экране и ничего лишнего", async () => {
+    const ui = await open();
+    await ui.press("/", "глава", "\r");
+    // Собираем слова из обращённых ячеек: подсветиться должно ровно
+    // искомое, а не куски соседних слов.
+    const words = new Set<string>();
+    for (let row = 0; row < ui.terminal.rows; row++) {
+      let word = "";
+      for (let column = 0; column < ui.terminal.columns; column++) {
+        const cell = ui.terminal.style(row, column);
+        if (cell.inverse && cell.char.trim()) word += cell.char;
+        else if (word) {
+          words.add(word.toLowerCase());
+          word = "";
+        }
+      }
+      if (word) words.add(word.toLowerCase());
+    }
+    expect([...words]).toEqual(["глава"]);
+  });
+
+  it("счётчик совпадений растёт по n", async () => {
+    const ui = await open();
+    await ui.press("/", "глава", "\r");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("совпадение 1 из");
+    await ui.press("n");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("совпадение 2 из");
+  });
+
+  it("N с первого совпадения уходит в конец и говорит об этом", async () => {
+    const ui = await open();
+    await ui.press("/", "глава", "\r", "N");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("поиск с начала");
+  });
+
+  it("не различает регистр и букву ё прямо на экране", async () => {
+    const ui = await open();
+    await ui.press("/", "ЁЛОЧКАМИ", "\r");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("совпадение 1 из 1");
+    const row = ui.terminal.findRow("ёлочками");
+    expect(row).toBeGreaterThan(0);
+    expect(ui.terminal.style(row, ui.terminal.line(row).indexOf("ёлочками")).inverse).toBe(true);
+  });
+
+  it("выбор в списке совпадений переносит к нему", async () => {
+    const ui = await open();
+    await ui.press("/", "глава", "\r", "l", "j", "\r");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("совпадение 2 из");
+  });
+
+  it("пустой запрос убирает подсветку с экрана", async () => {
+    const ui = await open();
+    await ui.press("/", "глава", "\r");
+    await ui.press("/", "\r");
+    let inverse = 0;
+    for (let row = 1; row < ui.terminal.rows - 1; row++) {
+      for (let column = 0; column < ui.terminal.columns; column++) {
+        if (ui.terminal.style(row, column).inverse) inverse += 1;
+      }
+    }
+    expect(inverse).toBe(0);
+  });
+
+  it("список совпадений без запроса подсказывает начать поиск", async () => {
+    const ui = await open();
+    await ui.press("l");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("сначала задайте поиск");
+  });
+
   it("на ненайденном честно говорит об этом", async () => {
     const ui = await open();
     await ui.press("/", "такогонетвкниге", "\r");
@@ -165,11 +234,11 @@ describe("поиск", () => {
 describe("сноски", () => {
   it("Enter переходит к тексту сноски, Backspace возвращает", async () => {
     const ui = await open();
-    const before = ui.session.reader.currentBlock();
+    const before = ui.reader.currentBlock();
     await ui.press("\r");
     expect(ui.terminal.text()).toContain("Это текст сноски");
     await ui.press("\x7f");
-    expect(ui.session.reader.currentBlock()).toBe(before);
+    expect(ui.reader.currentBlock()).toBe(before);
   });
 
   it("клик по маркеру открывает сноску", async () => {
@@ -183,11 +252,11 @@ describe("сноски", () => {
 
   it("правая кнопка возвращает из сноски", async () => {
     const ui = await open();
-    const before = ui.session.reader.currentBlock();
+    const before = ui.reader.currentBlock();
     await ui.press("\r");
     ui.terminal.click(1, 5, 2);
     await ui.press("");
-    expect(ui.session.reader.currentBlock()).toBe(before);
+    expect(ui.reader.currentBlock()).toBe(before);
   });
 
   it("когда ссылок на экране нет, говорит об этом", async () => {
@@ -219,10 +288,52 @@ describe("закладки", () => {
     expect(ui.terminal.text()).toContain("Закладки");
   });
 
-  it("в списке закладок d удаляет выбранную", async () => {
+  it("удаление последней закладки закрывает список", async () => {
     const ui = await open();
     await ui.press("M", "'", "d");
-    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("закладка удалена");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("закладок больше нет");
+    expect(ui.terminal.text()).not.toContain("Закладки");
+  });
+
+  it("после удаления список остаётся открытым, пока закладки есть", async () => {
+    const ui = await open();
+    await ui.press("M", "]", "M", "'");
+    expect(ui.terminal.text()).toContain("Закладки");
+    await ui.press("d");
+    // Удалять по одной удобнее, чем каждый раз заходить в список заново.
+    expect(ui.terminal.text()).toContain("Закладки");
+    expect(ui.reader.bookmarks).toHaveLength(1);
+  });
+
+  it("e выгружает закладки и говорит куда", async () => {
+    const written: Array<{ text: string }> = [];
+    const ui = await open({
+      exportBookmarks: (marks: unknown[]) => {
+        written.push({ text: `закладок: ${marks.length}` });
+        return "закладки сохранены: /куда-то/книга — закладки.md";
+      },
+    });
+    await ui.press("M", "'", "e");
+    expect(written).toHaveLength(1);
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("закладки сохранены");
+    expect(ui.terminal.text()).not.toContain("Закладки"); // окно закрылось
+  });
+
+  it("в списке закладок подсказка перечисляет все действия", async () => {
+    const ui = await open();
+    await ui.press("M", "'");
+    expect(ui.terminal.text()).toContain("e — экспорт");
+    expect(ui.terminal.text()).toContain("d — удалить");
+  });
+
+  it("Enter в списке переносит к закладке", async () => {
+    const ui = await open();
+    await ui.press("]", "M");            // закладка во второй главе
+    const marked = ui.reader.currentBlock();
+    await ui.press("g");                 // ушли в начало
+    expect(ui.reader.currentBlock()).toBeLessThan(marked);
+    await ui.press("'", "\r");
+    expect(ui.reader.currentBlock()).toBe(marked);
   });
 
   it("без закладок подсказывает, как поставить", async () => {
@@ -273,12 +384,33 @@ describe("вид текста", () => {
   });
 
   it("плюс и минус меняют ширину колонки", async () => {
-    const ui: Harness = await open({}, { columns: 100 });
-    const before = ui.session.reader.currentBlock();
+    const ui: ReaderHarness = await open({}, { columns: 100 });
+    const before = ui.reader.currentBlock();
     await ui.press("-", "-");
-    expect(ui.session.reader.maxWidth).toBe(52);
+    expect(ui.reader.maxWidth).toBe(52);
     await ui.press("+");
-    expect(ui.session.reader.maxWidth).toBe(56);
-    expect(ui.session.reader.currentBlock()).toBe(before);
+    expect(ui.reader.maxWidth).toBe(56);
+    expect(ui.reader.currentBlock()).toBe(before);
+  });
+});
+
+describe("EPUB на экране", () => {
+  it("открывается, ходит по оглавлению и по сноске между файлами", async () => {
+    const ui = await harness({ book: await epubBook(), ...OPTIONS });
+    expect(ui.terminal.line(0)).toContain("Анна Автор — Пример EPUB");
+
+    await ui.press("t", "j", "\r");
+    expect(ui.reader.currentBlock()).toBeGreaterThan(0);
+
+    await ui.press("g", "\r");
+    expect(ui.terminal.text()).toContain("Это текст сноски из EPUB");
+    await ui.press("\x7f");
+    expect(ui.terminal.text()).not.toContain("Это текст сноски из EPUB");
+  });
+
+  it("ищет по тексту так же, как в FB2", async () => {
+    const ui = await harness({ book: await epubBook(), ...OPTIONS });
+    await ui.press("/", "ключесловом", "\r");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("совпадение 1 из");
   });
 });

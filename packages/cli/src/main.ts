@@ -4,13 +4,16 @@
 
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import {
   Book,
   bookKey,
+  bookmarksFileName,
+  bookmarksMarkdown,
   configSample,
   layout,
   readConfig,
+  type Bookmark,
   type ConfigResult,
   type ImageBackend,
   type Theme,
@@ -21,6 +24,8 @@ import { libraryLines, scanDir } from "./library.js";
 import { configFile } from "./paths.js";
 import { JsonFileStore } from "./store.js";
 import { NodeTerminal } from "./term/terminal.js";
+import { runLibrary } from "./ui/library.js";
+import { readBook } from "./ui/read.js";
 import { Session } from "./ui/session.js";
 
 /** Настройки чтения после слияния всех источников. */
@@ -63,6 +68,22 @@ function choose<T>(fromArgs: T | undefined, fromConfig: T | undefined, saved: T 
   if (fromArgs !== undefined) return fromArgs;
   if (fromConfig !== undefined) return fromConfig;
   return saved ?? fallback;
+}
+
+/**
+ * Пишет закладки в файл рядом с тем, откуда запущена читалка.
+ *
+ * Текст и имя файла готовит ядро; здесь только запись и сообщение, которое
+ * читатель увидит в строке состояния.
+ */
+function exportBookmarks(book: Book, marks: Bookmark[]): string {
+  const target = join(process.cwd(), bookmarksFileName(book.title));
+  try {
+    writeFileSync(target, bookmarksMarkdown(book, marks), "utf-8");
+  } catch (e) {
+    return `не удалось записать файл: ${(e as Error).message}`;
+  }
+  return `закладки сохранены: ${target}`;
 }
 
 async function writeConfigSample(path: string): Promise<number> {
@@ -125,9 +146,24 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       fail(`в ${args.file ?? "истории чтения"} книг не нашлось`);
       return 1;
     }
-    // Список книг на экране появится вместе с M3; пока он печатается
-    // текстом, и это работает в любом окружении.
-    return printLines(libraryLines(entries));
+    // Вывод не в терминал — печатаем список текстом: так работает
+    // `fb2read ~/books | grep`, и экран при этом не занимается.
+    if (!process.stdout.isTTY) return printLines(libraryLines(entries));
+
+    const after = await runLibrary(new NodeTerminal(), {
+      entries,
+      prefs,
+      store,
+      fromStart: args.fromStart,
+      exportBookmarks,
+    });
+    await store.saveSettings({
+      theme: after.theme,
+      spacing: after.spacing,
+      columns: after.columns,
+      mouse: after.mouse,
+    });
+    return 0;
   }
 
   let book: Book;
@@ -170,29 +206,36 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   const start = args.fromStart ? 0 : await store.loadPosition(key);
   const bookmarks = await store.loadBookmarks(key);
 
-  const session = new Session(new NodeTerminal(), {
-    book,
-    path,
-    width: prefs.width,
-    startBlock: start,
-    theme: prefs.theme,
-    spacing: prefs.spacing,
-    columns: prefs.columns,
-    images: prefs.images,
-    mouse: prefs.mouse,
-    keys: prefs.keys,
-    bookmarks,
-    saveBookmarks: (marks) => {
-      void store.saveBookmarks(key, marks, {
-        title: book.title,
-        author: book.author,
-        total: book.blocks.length,
-        path,
-      });
-    },
-  });
-
-  const result = await session.run();
+  const session = new Session(new NodeTerminal());
+  session.begin(prefs.mouse);
+  let result;
+  try {
+    result = await readBook(session, {
+      book,
+      path,
+      width: prefs.width,
+      startBlock: start,
+      theme: prefs.theme,
+      spacing: prefs.spacing,
+      columns: prefs.columns,
+      images: prefs.images,
+      imagesOff: prefs.images === "off",
+      mouse: prefs.mouse,
+      keys: prefs.keys,
+      bookmarks,
+      saveBookmarks: (marks) => {
+        void store.saveBookmarks(key, marks, {
+          title: book.title,
+          author: book.author,
+          total: book.blocks.length,
+          path,
+        });
+      },
+      exportBookmarks: (marks) => exportBookmarks(book, marks),
+    });
+  } finally {
+    session.end();
+  }
   await store.savePosition(key, {
     block: result.block,
     title: book.title,
@@ -205,10 +248,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   // Способ показа картинок не запоминаем: он зависит от того, в каком
   // терминале книгу открыли сейчас.
   await store.saveSettings({
-    theme: session.reader.theme.name,
-    spacing: session.reader.spacing,
-    columns: session.reader.columns,
-    mouse: session.reader.mouse,
+    theme: result.reader.theme.name,
+    spacing: result.reader.spacing,
+    columns: result.reader.columns,
+    mouse: result.reader.mouse,
   });
   return 0;
 }

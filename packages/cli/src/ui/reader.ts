@@ -58,10 +58,26 @@ export interface ReaderOptions {
   keys?: Record<string, string>;
   bookmarks?: Bookmark[];
   path?: string;
+  /** Выключен ли показ картинок: об этом надо сказать до выбора, а не после. */
+  imagesOff?: boolean;
   /** Показ картинки: слой терминала знает, каким протоколом рисовать. */
   showImage?: (block: Block) => Promise<string>;
+  /**
+   * Просьба перерисовать экран.
+   *
+   * Нужна там, где читалка меняет вид не в ответ на нажатие: показ картинки
+   * заканчивается когда-то потом, и сеанс сам об этом не узнает.
+   */
+  requestPaint?: () => void;
   /** Сохранение закладок наружу. */
   saveBookmarks?: (marks: Bookmark[]) => void;
+  /**
+   * Выгрузка закладок в файл.
+   *
+   * Текст готовит ядро, а куда его положить, знает только платформа, —
+   * поэтому запись остаётся снаружи и возвращает сообщение читателю.
+   */
+  exportBookmarks?: (marks: Bookmark[]) => string;
 }
 
 export class Reader {
@@ -346,7 +362,11 @@ export class Reader {
       return;
     }
     if (this.popup) {
-      if (this.popup.key(name)) this.popup = null;
+      // Закрывшееся окно могло открыть следующее прямо из обработчика —
+      // так список закладок переоткрывается после удаления. Гасим только
+      // то окно, что действительно закрылось.
+      const shown = this.popup;
+      if (shown.key(name) && this.popup === shown) this.popup = null;
       return;
     }
 
@@ -364,7 +384,9 @@ export class Reader {
   mouseEvent(event: MouseEvent): void {
     if (this.prompt) return;
     if (this.popup) {
-      if (this.popup.mouse(event)) this.popup = null;
+      // Как и с клавишами: обработчик мог открыть следующее окно.
+      const shown = this.popup;
+      if (shown.mouse(event) && this.popup === shown) this.popup = null;
       return;
     }
     if (event.motion) return;
@@ -777,23 +799,34 @@ export class Reader {
       this.message = "закладок нет: поставить — M";
       return;
     }
-    const sorted = [...this.bookmarks].sort((a, b) => a.block - b.block);
-    const items = sorted.map(
-      (m) => `${String(m.percent ?? 0).padStart(3)}%  ${m.name ?? ""}`,
-    );
+    // Порядок добавления, а не по книге: так закладка, которую только что
+    // поставили, остаётся там, где её оставил читатель.
+    const marks = [...this.bookmarks];
+    const items = marks.map((m) => `${String(m.percent ?? 0).padStart(3)}%  ${m.name ?? ""}`);
     this.openPopup({
       title: "Закладки",
       items,
       select: 0,
-      actions: "d",
-      hint: " Enter — перейти, d — удалить, q — закрыть ",
+      actions: "de",
+      hint: " Enter — перейти, d — удалить, e — экспорт, q — закрыть ",
       onDone: (result) => {
         if (!result) return;
-        const mark = sorted[result.index]!;
-        if ("action" in result) {
-          this.bookmarks = this.bookmarks.filter((m) => m.block !== mark.block);
+        const mark = marks[result.index]!;
+        if ("action" in result && result.action === "d") {
+          this.bookmarks = this.bookmarks.filter((m) => m !== mark);
           this.storeBookmarks();
-          this.message = "закладка удалена";
+          if (!this.bookmarks.length) {
+            this.message = "закладок больше нет";
+            return;
+          }
+          // Список открывается снова: удалять по одной удобнее, чем каждый
+          // раз заходить заново.
+          this.showBookmarks();
+          return;
+        }
+        if ("action" in result && result.action === "e") {
+          this.message =
+            this.options.exportBookmarks?.(this.bookmarks) ?? "выгрузка закладок недоступна";
           return;
         }
         this.goToBlock(mark.block);
@@ -822,6 +855,11 @@ export class Reader {
       this.message = "на экране нет иллюстраций";
       return;
     }
+    // Про выключенный показ надо сказать сразу, а не после выбора картинки.
+    if (this.options.imagesOff) {
+      this.message = "показ картинок выключен ключом --images off";
+      return;
+    }
     if (images.length === 1) {
       await this.showImage(images[0]!);
       return;
@@ -837,17 +875,22 @@ export class Reader {
   }
 
   private async openImageAt(src: string): Promise<void> {
+    if (this.options.imagesOff) {
+      this.message = "показ картинок выключен ключом --images off";
+      return;
+    }
     const block = this.book.blocks.find((b) => b.kind === "image" && b.src === src);
     if (block) await this.showImage(block);
   }
 
   private async showImage(block: Block): Promise<void> {
     if (!this.options.showImage) {
-      this.message = "показ иллюстраций выключен";
+      this.message = "показ картинок выключен ключом --images off";
       return;
     }
     this.message = await this.options.showImage(block);
     this.needsFullRedraw = true;
+    this.options.requestPaint?.();
   }
 
   // --- служебное --------------------------------------------------------

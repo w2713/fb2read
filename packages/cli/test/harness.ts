@@ -9,11 +9,15 @@
  */
 
 import { Terminal as Xterm } from "@xterm/headless";
-import { enterSequence, leaveSequence } from "../src/term/ansi.js";
+import { MOUSE_OFF, MOUSE_ON, enterSequence, leaveSequence } from "../src/term/ansi.js";
 import type { InputEvent } from "../src/term/input.js";
 import { InputParser } from "../src/term/input.js";
 import type { Terminal } from "../src/term/terminal.js";
-import { Session, type SessionOptions } from "../src/ui/session.js";
+import { Session } from "../src/ui/session.js";
+import { createReader, type ReadOptions } from "../src/ui/read.js";
+import { Chooser, type ChooserEntry } from "../src/ui/chooser.js";
+import { Theme } from "../src/ui/theme.js";
+import type { Reader } from "../src/ui/reader.js";
 
 /** Терминал, который вместо системы пишет в эмулятор и в сырой журнал. */
 export class FakeTerminal implements Terminal {
@@ -75,7 +79,10 @@ export class FakeTerminal implements Terminal {
   }
 
   setMouse(on: boolean): void {
+    if (on === this.mouseEnabled) return;
     this.mouseEnabled = on;
+    // Настоящий терминал шлёт при этом байты, и проверки на них смотрят.
+    this.write(on ? MOUSE_ON : MOUSE_OFF);
   }
 
   /** Посылает то же, что послал бы терминал при нажатии клавиш. */
@@ -149,39 +156,86 @@ export class FakeTerminal implements Terminal {
   }
 }
 
-/** Читалка, готовая к проверкам: экран уже нарисован. */
+/** Экран, готовый к проверкам: первый кадр уже нарисован. */
 export interface Harness {
   terminal: FakeTerminal;
   session: Session;
   /** Посылает клавиши и ждёт, пока экран обновится. */
   press(...sequences: string[]): Promise<void>;
+  /** Ждёт, пока разойдутся отложенные дела, и обновляет экран. */
+  settle(): Promise<void>;
   /** Меняет размер окна и ждёт перерисовки. */
   resize(rows: number, columns: number): Promise<void>;
 }
 
-/** Собирает читалку поверх поддельного терминала и рисует первый кадр. */
-export async function harness(
-  options: Omit<SessionOptions, "images"> & { images?: SessionOptions["images"] },
-  size: { rows?: number; columns?: number } = {},
-): Promise<Harness> {
-  const terminal = new FakeTerminal(size.rows ?? 24, size.columns ?? 80);
-  const session = new Session(terminal, { images: "off", ...options });
+/** Стенд с читалкой. */
+export interface ReaderHarness extends Harness {
+  reader: Reader;
+}
 
-  // Цикл событий запускаем без ожидания: выход из читалки его завершит.
-  void session.run();
-  await terminal.drain();
+/** Стенд со списком книг. */
+export interface ChooserHarness extends Harness {
+  chooser: Chooser;
+  /** Что выбрал читатель, когда список закончился. */
+  picked(): Promise<string | null>;
+}
 
+function controls(terminal: FakeTerminal, session: Session): Omit<Harness, "terminal" | "session"> {
   return {
-    terminal,
-    session,
     async press(...sequences: string[]) {
       terminal.send(...sequences);
       await new Promise((resolve) => setImmediate(resolve));
+      await terminal.drain();
+    },
+    async settle() {
+      await new Promise((resolve) => setImmediate(resolve));
+      session.paint();
       await terminal.drain();
     },
     async resize(rows: number, columns: number) {
       terminal.resize(rows, columns);
       await terminal.drain();
     },
+  };
+}
+
+/** Собирает читалку поверх поддельного терминала и рисует первый кадр. */
+export async function harness(
+  options: Omit<ReadOptions, "images"> & { images?: ReadOptions["images"] },
+  size: { rows?: number; columns?: number } = {},
+): Promise<ReaderHarness> {
+  const terminal = new FakeTerminal(size.rows ?? 24, size.columns ?? 80);
+  const session = new Session(terminal);
+  session.begin(options.mouse);
+
+  const reader = createReader(session, { images: "off", ...options });
+  // Показ не ждём, но терминал возвращаем, как это делает настоящий запуск.
+  void session.show(reader).then(() => session.end());
+  await terminal.drain();
+
+  return { terminal, session, reader, ...controls(terminal, session) };
+}
+
+/** Собирает список книг поверх поддельного терминала. */
+export async function libraryHarness(
+  entries: ChooserEntry[],
+  options: { theme?: string; mouse?: boolean; rows?: number; columns?: number } = {},
+): Promise<ChooserHarness> {
+  const terminal = new FakeTerminal(options.rows ?? 24, options.columns ?? 80);
+  const session = new Session(terminal);
+  session.begin(options.mouse ?? true);
+  const chooser = new Chooser(entries, new Theme(options.theme ?? "night"), options.mouse ?? true);
+  const shown = session.show(chooser).then(() => {
+    session.end();
+    return chooser.picked;
+  });
+  await terminal.drain();
+
+  return {
+    terminal,
+    session,
+    chooser,
+    picked: () => shown,
+    ...controls(terminal, session),
   };
 }

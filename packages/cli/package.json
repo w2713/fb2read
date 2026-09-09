@@ -19,6 +19,7 @@
   "devDependencies": {
     "@fb2read/core": "workspace:*",
     "@xterm/headless": "^6.0.0",
+    "fflate": "^0.8.3",
     "node-pty": "^1.1.0"
   }
 }
