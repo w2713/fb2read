@@ -1,7 +1,22 @@
 /** Разбор командной строки. */
 
+import { readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ArgsError, parseCliArgs } from "../src/args.js";
+import { ArgsError, VERSION, parseCliArgs } from "../src/args.js";
+
+describe("версия", () => {
+  it("совпадает с той, что в пакете", () => {
+    // Версия названа в двух местах: программа показывает её по --version,
+    // а выпуск сверяет с тегом. Разъедутся — и релиз выйдет с чужим числом.
+    const here = dirname(fileURLToPath(import.meta.url));
+    const manifest = JSON.parse(
+      readFileSync(resolve(here, "..", "package.json"), "utf-8"),
+    ) as { version: string };
+    expect(VERSION).toBe(manifest.version);
+  });
+});
 
 describe("аргументы", () => {
   it("без аргументов ничего не просит", () => {
