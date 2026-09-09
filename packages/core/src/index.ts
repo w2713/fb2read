@@ -33,4 +33,14 @@ export { bookKey, progressPercent, plural } from "./state.js";
 export type { StateStore, PositionRecord, Bookmark, RecentEntry, Settings } from "./state.js";
 export { bookmarkLabel, bookmarksMarkdown, bookmarksFileName } from "./bookmarks.js";
 export { quickMeta, epubMeta, isBookName, BOOK_SUFFIXES } from "./meta.js";
+export {
+  mergePosition,
+  mergeBookmarks,
+  mergeState,
+  liveBookmarks,
+  SyncClient,
+  SyncError,
+  SKEW_LIMIT,
+} from "./sync.js";
+export type { SyncState, RemoteBook, SyncOptions, SyncFetch, SyncRequest, SyncResponse } from "./sync.js";
 export type { QuickMeta } from "./meta.js";

@@ -30,3 +30,4 @@ interface Crypto {
 }
 
 declare const crypto: Crypto;
+
