@@ -1,9 +1,5 @@
 /**
- * Точка входа: разбор аргументов и режимы вывода.
- *
- * Чтение в терминале появится на следующем этапе; сейчас работают режимы,
- * которые не занимают экран: `--dump`, `--toc`, `--info`, `--write-config`
- * и текстовый список книг.
+ * Точка входа: разбор аргументов, режимы вывода и запуск чтения.
  */
 
 import { mkdirSync, statSync, writeFileSync } from "node:fs";
@@ -24,6 +20,8 @@ import { FileSource } from "./fsSource.js";
 import { libraryLines, scanDir } from "./library.js";
 import { configFile } from "./paths.js";
 import { JsonFileStore } from "./store.js";
+import { NodeTerminal } from "./term/terminal.js";
+import { Session } from "./ui/session.js";
 
 /** Настройки чтения после слияния всех источников. */
 interface Prefs {
@@ -127,14 +125,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       fail(`в ${args.file ?? "истории чтения"} книг не нашлось`);
       return 1;
     }
-    if (!process.stdout.isTTY) return printLines(libraryLines(entries));
-    fail("чтение в терминале появится на следующем этапе, пока доступен --dump");
+    // Список книг на экране появится вместе с M3; пока он печатается
+    // текстом, и это работает в любом окружении.
     return printLines(libraryLines(entries));
   }
 
   let book: Book;
+  let source: FileSource;
   try {
-    book = await Book.open(new FileSource(args.file!));
+    source = new FileSource(args.file!);
+    book = await Book.open(source);
   } catch (e) {
     fail(`${args.file}: ${(e as Error).message}`);
     return 1;
@@ -165,15 +165,52 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     return 2;
   }
 
-  // Пока читалки нет, покажем, что книга разобрана, и подскажем режимы.
-  const key = await bookKey(resolve(args.file!), new FileSource(args.file!).size);
+  const path = resolve(args.file!);
+  const key = await bookKey(path, source.size);
   const start = args.fromStart ? 0 : await store.loadPosition(key);
-  fail("чтение в терминале появится на следующем этапе");
-  return printLines([
-    `${book.author ? book.author + " — " : ""}${book.title}`,
-    `абзацев: ${book.blocks.length}, сохранённая позиция: ${start}`,
-    "пока доступны --dump, --toc, --info",
-  ]);
+  const bookmarks = await store.loadBookmarks(key);
+
+  const session = new Session(new NodeTerminal(), {
+    book,
+    path,
+    width: prefs.width,
+    startBlock: start,
+    theme: prefs.theme,
+    spacing: prefs.spacing,
+    columns: prefs.columns,
+    images: prefs.images,
+    mouse: prefs.mouse,
+    keys: prefs.keys,
+    bookmarks,
+    saveBookmarks: (marks) => {
+      void store.saveBookmarks(key, marks, {
+        title: book.title,
+        author: book.author,
+        total: book.blocks.length,
+        path,
+      });
+    },
+  });
+
+  const result = await session.run();
+  await store.savePosition(key, {
+    block: result.block,
+    title: book.title,
+    author: book.author,
+    total: book.blocks.length,
+    path,
+    at: Date.now() / 1000,
+    hash: book.hash,
+  });
+  // Способ показа картинок не запоминаем: он зависит от того, в каком
+  // терминале книгу открыли сейчас.
+  await store.saveSettings({
+    theme: session.reader.theme.name,
+    spacing: session.reader.spacing,
+    columns: session.reader.columns,
+    mouse: session.reader.mouse,
+  });
+  return 0;
 }
 
 function safeIsDirectory(path: string): boolean {
