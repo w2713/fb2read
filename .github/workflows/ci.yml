@@ -47,6 +47,17 @@ jobs:
         run: |
           sudo apt-get install -y shellcheck
           shellcheck -s sh scripts/*.sh
+      # Рабочие процессы проверять некому: они запускаются от случая к
+      # случаю, а недействительный файл падает мгновенно и молча — так уже
+      # случилось с выпуском. actionlint ловит это на pull request.
+      - name: Проверить рабочие процессы
+        run: |
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT/actionlint_${ACTIONLINT}_linux_amd64.tar.gz" \
+            | tar xz actionlint
+          ./actionlint
+        env:
+          # Версия закреплена: иначе проверка однажды поменяет мнение сама.
+          ACTIONLINT: 1.7.7
 
   parity:
     runs-on: ubuntu-latest

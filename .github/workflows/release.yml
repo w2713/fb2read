@@ -83,6 +83,9 @@ jobs:
     name: Выложить релиз
     needs: binaries
     runs-on: ubuntu-latest
+    # Только по тегу. Ручной прогон нужен, чтобы убедиться, что бинарники
+    # собираются, — релиз с именем ветки при этом никому не нужен.
+    if: startsWith(github.ref, 'refs/tags/v')
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -114,6 +117,12 @@ jobs:
     # Публикуется только по настоящему тегу и только если задан токен:
     # без него шаг тихо пропускается, а релиз с бинарниками всё равно выйдет.
     if: startsWith(github.ref, 'refs/tags/v')
+    # Секрет в условии `if` подставить нельзя: GitHub отвергает такой файл
+    # целиком, и выпуск не начинается вовсе. Переменная задачи в условиях
+    # шагов видна — в отличие от переменной самого шага, которая к моменту
+    # проверки его `if` ещё не вычислена.
+    env:
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -127,7 +136,7 @@ jobs:
       - run: pnpm build
       - name: Публикация
         # Без токена шаг пропускается: релиз с бинарниками выходит всё равно.
-        if: secrets.NPM_TOKEN != ''
+        if: env.NPM_TOKEN != ''
         working-directory: packages/cli
         run: npm publish --provenance --access public
         env:
