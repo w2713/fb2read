@@ -7,10 +7,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "build": "tsc -b packages/core && pnpm --filter fb2read build",
+    "build": "tsc -b packages/core && pnpm --filter fb2read build && pnpm --filter fb2read-server build",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc -b packages/core packages/cli --pretty"
+    "typecheck": "tsc -b packages/core packages/cli packages/server --pretty"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -162,14 +162,21 @@ describe("клиент", () => {
     let auth: string | undefined;
     const client = new SyncClient({
       url: "http://localhost",
-      token: "секрет",
+      token: "s3cr3t-token",
       fetch: fakeFetch((_url, init) => {
         auth = init?.headers?.["Authorization"];
         return { books: [] };
       }),
     });
     await client.list();
-    expect(auth).toBe("Bearer секрет");
+    expect(auth).toBe("Bearer s3cr3t-token");
+  });
+
+  it("сразу отвергает токен, который не пройдёт в заголовке", () => {
+    // Кириллица в Authorization роняет сам вызов fetch невнятной ошибкой
+    // про ByteString. Сказать про это стоит на месте, а не в глубине сети.
+    expect(() => new SyncClient({ url: "http://localhost", token: "секрет" })).toThrow(SyncError);
+    expect(() => new SyncClient({ url: "http://localhost", token: "секрет" })).toThrow(/латинс/);
   });
 
   it("кодирует русское имя книги: в заголовке допустима только латиница", async () => {

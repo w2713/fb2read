@@ -153,6 +153,19 @@ export interface SyncOptions {
   fetch?: SyncFetch;
 }
 
+/**
+ * Токен уезжает в заголовке Authorization, а заголовки HTTP — только
+ * латиница. Кириллический токен не отвергается сетью, а роняет сам вызов
+ * невнятной ошибкой про ByteString, поэтому лучше сказать прямо и сразу.
+ */
+function checkToken(token: string): void {
+  if (!/^[\x21-\x7e]+$/.test(token)) {
+    throw new SyncError(
+      "токен должен состоять из латинских букв, цифр и знаков: в заголовке HTTP другого не передать",
+    );
+  }
+}
+
 /** Убирает завершающие косые черты, чтобы адрес складывался предсказуемо. */
 function trimSlashes(url: string): string {
   return url.replace(/\/+$/, "");
@@ -171,6 +184,7 @@ export class SyncClient {
 
   constructor(private readonly options: SyncOptions) {
     if (!options.url) throw new SyncError("не задан адрес сервера");
+    if (options.token) checkToken(options.token);
     this.base = `${trimSlashes(options.url)}/api/v1`;
     this.timeoutMs = options.timeoutMs ?? 10_000;
     const send = options.fetch ?? ambient.fetch;
@@ -228,15 +242,23 @@ export class SyncClient {
    * Повторная выгрузка того же содержимого ничего не портит: имя файла и
    * отпечаток совпадут, сервер просто подтвердит, что книга уже есть.
    */
-  async upload(hash: string, name: string, data: Uint8Array): Promise<void> {
+  async upload(
+    hash: string,
+    name: string,
+    data: Uint8Array,
+    meta: { title?: string; author?: string } = {},
+  ): Promise<void> {
+    // Имена и названия бывают русскими, а в заголовке допустима только
+    // латиница, поэтому они едут процентным кодированием.
+    const headers: Record<string, string> = {
+      "Content-Type": "application/octet-stream",
+      "X-Name": encodeURIComponent(name),
+    };
+    if (meta.title) headers["X-Title"] = encodeURIComponent(meta.title);
+    if (meta.author) headers["X-Author"] = encodeURIComponent(meta.author);
     await this.request(`/books/${hash}`, {
       method: "PUT",
-      // Имена книг бывают русскими, а в заголовке допустима только латиница,
-      // поэтому имя едет процентным кодированием.
-      headers: this.headers({
-        "Content-Type": "application/octet-stream",
-        "X-Name": encodeURIComponent(name),
-      }),
+      headers: this.headers(headers),
       body: data,
     });
   }
