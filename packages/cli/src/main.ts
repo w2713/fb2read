@@ -23,7 +23,17 @@ import { FileSource } from "./fsSource.js";
 import { libraryLines, scanDir } from "./library.js";
 import { configFile } from "./paths.js";
 import { JsonFileStore } from "./store.js";
-import { cmdPull, cmdPush, cmdRemote, cmdSync, syncOne, syncSettings } from "./sync.js";
+import {
+  cmdPull,
+  cmdPush,
+  cmdRemote,
+  cmdSync,
+  downloadBook,
+  remoteOnly,
+  syncOne,
+  syncSettings,
+} from "./sync.js";
+import type { ChooserEntry } from "./ui/chooser.js";
 import { NodeTerminal } from "./term/terminal.js";
 import { runLibrary } from "./ui/library.js";
 import { readBook } from "./ui/read.js";
@@ -156,9 +166,27 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       fail("для --dump/--toc/--info нужен файл книги");
       return 2;
     }
-    const entries = args.file
+    const entries: ChooserEntry[] = args.file
       ? await scanDir(args.file, store)
       : (await store.recent()).map((e) => ({ ...e }));
+
+    // Книги, лежащие только на сервере, показываются облаком и скачиваются
+    // по Enter. Сервер спрашивается недолго и без шума: если он недоступен,
+    // список появляется сразу и просто без облаков.
+    const librarySync = syncSettings(config.sync);
+    if (librarySync) {
+      const have = new Set((await store.syncableStates(librarySync.device)).map((s) => s.hash));
+      for (const book of await remoteOnly(librarySync, have)) {
+        entries.push({
+          path: "",
+          title: book.title,
+          author: book.author,
+          percent: null,
+          remote: book.hash,
+        });
+      }
+    }
+
     if (!entries.length) {
       fail(`в ${args.file ?? "истории чтения"} книг не нашлось`);
       return 1;
@@ -173,6 +201,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       store,
       fromStart: args.fromStart,
       exportBookmarks,
+      ...(librarySync
+        ? { download: (hash: string, name: string) => downloadBook(librarySync, store, hash, name) }
+        : {}),
     });
     await store.saveSettings({
       theme: after.theme,

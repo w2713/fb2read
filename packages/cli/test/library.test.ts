@@ -39,6 +39,27 @@ describe("список книг", () => {
     expect(ui.terminal.line(1)).toContain("Иван Тестов — Проверка читалки");
   });
 
+  it("книгу с сервера помечает облаком вместо процента", async () => {
+    const ui = await libraryHarness([
+      ...BOOKS,
+      { path: "", title: "Только на сервере", author: "Автор", percent: null, remote: "a".repeat(64) },
+    ]);
+    const row = ui.terminal.line(4);
+    expect(row).toContain("☁");
+    expect(row).toContain("Только на сервере");
+    // Точка значит «не начата», облако — «её тут вообще нет»: путать нельзя.
+    expect(row).not.toContain("·");
+  });
+
+  it("выбор книги с сервера сообщает, что скачивать", async () => {
+    const remote = { path: "", title: "Только на сервере", author: "", percent: null, remote: "b".repeat(64) };
+    const ui = await libraryHarness([remote]);
+    await ui.press("\r");
+    // Путь пустой, поэтому библиотеке нужна сама запись — иначе скачивать
+    // будет нечего.
+    expect(ui.chooser.pickedEntry?.remote).toBe("b".repeat(64));
+  });
+
   it("у неоткрытой книги вместо процента точка", async () => {
     const ui = await libraryHarness(BOOKS);
     expect(ui.terminal.line(2)).toContain("·");

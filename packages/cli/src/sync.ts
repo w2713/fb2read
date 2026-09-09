@@ -248,6 +248,22 @@ export async function cmdPull(
  * поэтому позицию надо перенести явно — иначе книга откроется с начала, и
  * весь смысл затеи пропадёт.
  */
+async function applyRemoteState(
+  client: SyncClient,
+  store: JsonFileStore,
+  path: string,
+  data: Uint8Array,
+  hash: string,
+): Promise<number | null> {
+  const states = await client.states(0);
+  const state = states.find((s) => s.hash === hash);
+  if (!state) return null;
+  const key = await bookKey(path, data.length);
+  await store.applyState(key, state, path);
+  return progressPercent(state.block, state.total);
+}
+
+/** То же для команды pull, но с рассказом в терминал. */
 async function restorePosition(
   client: SyncClient,
   store: JsonFileStore,
@@ -255,12 +271,7 @@ async function restorePosition(
   data: Uint8Array,
   hash: string,
 ): Promise<void> {
-  const states = await client.states(0);
-  const state = states.find((s) => s.hash === hash);
-  if (!state) return;
-  const key = await bookKey(path, data.length);
-  await store.applyState(key, state, path);
-  const percent = progressPercent(state.block, state.total);
+  const percent = await applyRemoteState(client, store, path, data, hash);
   if (percent) out(`   позиция с сервера: ${percent}%`);
 }
 
@@ -319,6 +330,51 @@ export async function cmdSync(prefs: SyncPrefs, store: JsonFileStore): Promise<n
   } catch (e) {
     return complain(e);
   }
+}
+
+// --- книги с сервера в списке ---------------------------------------------
+
+/** Книга, которая есть на сервере, но не на этом устройстве. */
+export interface RemoteOnly {
+  hash: string;
+  title: string;
+  author: string;
+  name: string;
+}
+
+/**
+ * Книги с сервера, которых здесь нет.
+ *
+ * Спрашивать сервер при каждом открытии списка нельзя молча: если он
+ * недоступен, список должен появиться немедленно и без облаков. Поэтому
+ * ошибка здесь не поднимается — просто пустой ответ.
+ */
+export async function remoteOnly(settings: SyncSettings, haveHashes: Set<string>): Promise<RemoteOnly[]> {
+  try {
+    const books = await clientFor(settings, 3000).list();
+    return books
+      .filter((b) => !haveHashes.has(b.hash))
+      .map((b) => ({ hash: b.hash, title: b.title || b.name, author: b.author, name: b.name }));
+  } catch {
+    return [];
+  }
+}
+
+/** Скачивает книгу с сервера в каталог библиотеки и возвращает путь. */
+export async function downloadBook(
+  settings: SyncSettings,
+  store: JsonFileStore,
+  hash: string,
+  name: string,
+): Promise<string> {
+  const client = clientFor(settings, 120_000);
+  const data = await client.download(hash);
+  const dir = libraryDir();
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, safeFileName(name));
+  writeFileSync(path, data);
+  await applyRemoteState(client, store, path, data, hash);
+  return path;
 }
 
 /**

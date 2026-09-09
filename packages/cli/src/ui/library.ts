@@ -41,6 +41,13 @@ export interface LibraryOptions {
   fromStart: boolean;
   /** Куда писать выгруженные закладки. */
   exportBookmarks: (book: Book, marks: Bookmark[]) => string;
+  /**
+   * Скачивание книги, которая есть только на сервере.
+   *
+   * Возвращает путь, по которому книга легла на диск. Сеть — дело
+   * платформы, поэтому сюда она приходит снаружи, а список о ней не знает.
+   */
+  download?: (hash: string, name: string) => Promise<string>;
 }
 
 /**
@@ -62,8 +69,27 @@ export async function runLibrary(
     for (;;) {
       const chooser = new Chooser(entries, new Theme(prefs.theme), prefs.mouse);
       await session.show(chooser);
-      const path = chooser.picked;
+      let path = chooser.picked;
       if (path === null) return prefs;
+
+      // Книга с сервера: сначала её надо забрать. Список остаётся на экране
+      // и говорит, что происходит, — иначе терминал просто замирает.
+      const picked = chooser.pickedEntry;
+      if (picked?.remote && options.download) {
+        chooser.notice = ` скачиваю ${picked.title}… `;
+        session.paint();
+        try {
+          path = await options.download(picked.remote, picked.title);
+          picked.path = path;
+          delete picked.remote;
+        } catch (e) {
+          chooser.notice = "";
+          chooser.showFailure(`${picked.title}: ${(e as Error).message}`);
+          await session.show(chooser);
+          continue;
+        }
+        chooser.notice = "";
+      }
 
       let book: Book;
       let source: FileSource;
