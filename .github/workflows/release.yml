@@ -126,7 +126,8 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
       - name: Публикация
-        if: env.NODE_AUTH_TOKEN != ''
+        # Без токена шаг пропускается: релиз с бинарниками выходит всё равно.
+        if: secrets.NPM_TOKEN != ''
         working-directory: packages/cli
         run: npm publish --provenance --access public
         env:

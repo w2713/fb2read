@@ -58,6 +58,8 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - uses: actions/setup-python@v5
         with: { python-version: "3.11" }
+      # Книги-образцы собираются кодом из тестов эталона, а он тянет pytest.
+      - run: pip install pytest
       - run: pnpm install --frozen-lockfile
       - run: pnpm --filter fb2read build
       - name: Сверить вывод с эталонной реализацией на Python

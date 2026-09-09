@@ -7,7 +7,16 @@
  * получила бы от терминала пользователя.
  */
 
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
@@ -26,8 +35,34 @@ try {
   // Собственный модуль: если он не собрался, эти проверки просто пропускаются,
   // а вся остальная проверка интерфейса от него не зависит.
   pty = require("node-pty") as Pty;
+  restoreSpawnHelper();
 } catch {
   pty = null;
+}
+
+/**
+ * Возвращает право на запуск вспомогательному файлу node-pty на macOS.
+ *
+ * Там псевдотерминал открывается не сам, а через маленькую программу
+ * spawn-helper. При установке через pnpm она теряет флаг запуска, и любой
+ * запуск падает с posix_spawnp failed ещё до того, как начнётся проверка.
+ */
+function restoreSpawnHelper(): void {
+  if (process.platform !== "darwin") return;
+  try {
+    const root = dirname(require.resolve("node-pty"));
+    const arch = process.arch === "arm64" ? "darwin-arm64" : "darwin-x64";
+    for (const candidate of [
+      resolve(root, "..", "prebuilds", arch, "spawn-helper"),
+      resolve(root, "..", "build", "Release", "spawn-helper"),
+    ]) {
+      if (!existsSync(candidate)) continue;
+      const mode = statSync(candidate).mode;
+      if (!(mode & 0o111)) chmodSync(candidate, mode | 0o755);
+    }
+  } catch {
+    // Не вышло — проверки честно упадут, и будет видно, что именно.
+  }
 }
 
 const runnable = pty !== null && existsSync(CLI) && process.platform !== "win32";
