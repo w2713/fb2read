@@ -26,15 +26,22 @@ jobs:
       - run: pnpm typecheck
       - run: pnpm build
       - run: pnpm test
-      - name: Версия в пакете должна совпадать с тегом
+      - name: Версии в пакетах должны совпадать с тегом
         if: startsWith(github.ref, 'refs/tags/v')
+        # Пакетов теперь два, и оба уезжают в npm по одному тегу. Проверять
+        # только читалку значит однажды выпустить сервер с чужим числом.
         run: |
+          set -eu
           tag="${GITHUB_REF#refs/tags/v}"
-          have=$(node -p "require('./packages/cli/package.json').version")
-          if [ "$tag" != "$have" ]; then
-            echo "тег v$tag, а в package.json $have" >&2
-            exit 1
-          fi
+          bad=0
+          for pkg in cli server; do
+            have=$(node -p "require('./packages/$pkg/package.json').version")
+            if [ "$tag" != "$have" ]; then
+              echo "тег v$tag, а в packages/$pkg/package.json $have" >&2
+              bad=1
+            fi
+          done
+          [ "$bad" = 0 ]
 
   binaries:
     name: Бинарники (${{ matrix.host }})
