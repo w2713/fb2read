@@ -1,0 +1,49 @@
+{
+  "name": "fb2read",
+  "version": "0.11.0",
+  "type": "module",
+  "description": "Читалка книг FB2 и EPUB для терминала",
+  "license": "MIT",
+  "keywords": [
+    "fb2",
+    "epub",
+    "ebook",
+    "reader",
+    "terminal",
+    "tui",
+    "cli",
+    "книги",
+    "читалка"
+  ],
+  "homepage": "https://github.com/w2713/fb2read#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/w2713/fb2read.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/w2713/fb2read/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "bin": {
+    "fb2read": "./dist/fb2read.mjs"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsup"
+  },
+  "devDependencies": {
+    "@fb2read/core": "workspace:*",
+    "@xterm/headless": "^6.0.0",
+    "fflate": "^0.8.3",
+    "node-pty": "^1.1.0"
+  }
+}

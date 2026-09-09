@@ -1,0 +1,68 @@
+name: Страница с установщиками
+
+# Кладёт install.sh и install.ps1 на GitHub Pages, чтобы строка установки
+# была короткой и не зависела от того, как устроен репозиторий внутри.
+# Позже сюда же приедет читалка для браузера.
+on:
+  push:
+    branches: [main]
+    paths:
+      - scripts/install.sh
+      - scripts/install.ps1
+      - .github/workflows/pages.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Собрать страницу
+        run: |
+          set -eu
+          mkdir -p site
+          cp scripts/install.sh scripts/install.ps1 site/
+          # Простая страница на случай, если по адресу зайдут браузером.
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="ru">
+          <meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>fb2read — читалка FB2 и EPUB для терминала</title>
+          <style>
+            body { max-width: 40rem; margin: 3rem auto; padding: 0 1rem;
+                   font: 16px/1.6 system-ui, sans-serif; }
+            pre { background: #f4f4f4; padding: .8rem 1rem; overflow-x: auto; }
+            @media (prefers-color-scheme: dark) {
+              body { background: #14161a; color: #d8dce3; }
+              pre { background: #1e2128; }
+              a { color: #8ab4f8; }
+            }
+          </style>
+          <h1>fb2read</h1>
+          <p>Читалка книг FB2 и EPUB для терминала.</p>
+          <h2>Linux и macOS</h2>
+          <pre>curl -fsSL https://w2713.github.io/fb2read/install.sh | sh</pre>
+          <h2>Windows</h2>
+          <pre>irm https://w2713.github.io/fb2read/install.ps1 | iex</pre>
+          <h2>Android (Termux) и всё остальное</h2>
+          <pre>npm install -g fb2read</pre>
+          <p><a href="https://github.com/w2713/fb2read">Исходный код и описание</a></p>
+          HTML
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with: { path: site }
+      - id: deploy
+        uses: actions/deploy-pages@v4
