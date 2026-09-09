@@ -21,6 +21,7 @@ import {
   progressPercent,
   quickMeta,
   sha256Hex,
+  type Bookmark,
   type RemoteBook,
   type SyncPrefs,
   type SyncState,
@@ -422,6 +423,71 @@ export async function syncOne(
     // ли он, — но и мешать чтению это не должно.
     return { state: null, note: e instanceof SyncError ? e.message : (e as Error).message };
   }
+}
+
+/**
+ * Обмен состоянием всех книг — молча, для нажатия клавиши в списке.
+ *
+ * От команды `sync` отличается тем, что ничего не печатает: на экране список
+ * книг, и писать поверх него нельзя. Итог возвращается строкой.
+ */
+export async function syncAllQuiet(
+  settings: SyncSettings,
+  store: JsonFileStore,
+): Promise<string> {
+  const local = await store.syncableStates(settings.device);
+  if (!local.length) {
+    const skipped = await store.countWithoutHash();
+    return skipped
+      ? `нечего синхронизировать: ${skipped} книг без отпечатка, откройте их`
+      : "нечего синхронизировать";
+  }
+  const client = clientFor(settings, 30_000);
+  let changed = 0;
+  for (const state of local) {
+    const { key, path, ...wire } = state;
+    const { state: merged } = await client.pushState(wire);
+    await store.applyState(key, merged, path);
+    if (differs(wire, merged)) changed += 1;
+  }
+  return changed
+    ? `синхронизировано ${local.length}, обновилось ${changed}`
+    : `синхронизировано ${local.length}, всё и так совпадало`;
+}
+
+/**
+ * Синхронизация одной книги по нажатию клавиши в читалке.
+ *
+ * Отличается от фоновой тем, что читателю нужен внятный ответ: он нажал и
+ * ждёт. Поэтому итог всегда словами — и когда получилось, и когда нет, — а
+ * закладки возвращаются наружу, чтобы поставленные на другом устройстве
+ * появились сразу, а не после перезапуска.
+ */
+export async function syncOnDemand(
+  settings: SyncSettings,
+  store: JsonFileStore,
+  key: string,
+  meta: { hash: string; title: string; author: string; total: number },
+  path: string,
+  block: number,
+  bookmarks: Bookmark[],
+): Promise<{ text: string; bookmarks?: Bookmark[] }> {
+  const state: SyncState = {
+    hash: meta.hash,
+    block,
+    total: meta.total,
+    title: meta.title,
+    author: meta.author,
+    at: Date.now() / 1000,
+    device: settings.device,
+    bookmarks,
+  };
+  const { state: merged, note } = await syncOne(settings, store, key, state, path);
+  if (!merged) return { text: `не вышло: ${note}` };
+
+  const added = merged.bookmarks.length - bookmarks.length;
+  const text = note || (added > 0 ? `синхронизировано, закладок прибавилось: ${added}` : "синхронизировано");
+  return { text, bookmarks: merged.bookmarks };
 }
 
 /** Состояние книги из хранилища в виде, готовом к отправке. */

@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { IMAGE_BACKENDS, THEME_ORDER, type ImageBackend, type Theme } from "@fb2read/core";
 
 export const APP = "fb2read";
-export const VERSION = "0.13.0";
+export const VERSION = "0.14.0";
 
 /** Команды синхронизации: первое слово, а не ключ. */
 export const COMMANDS = ["sync", "push", "pull", "remote"] as const;
@@ -41,8 +41,10 @@ export interface Args {
 /** Ошибка в командной строке: сообщение готово к печати. */
 export class ArgsError extends Error {}
 
-export const HELP = `Использование: ${APP} [КЛЮЧИ] [ФАЙЛ]
-                ${APP} КОМАНДА [АРГУМЕНТ]
+export const HELP = `${APP} ${VERSION}
+
+Использование: ${APP} [КЛЮЧИ] [ФАЙЛ]
+               ${APP} КОМАНДА [АРГУМЕНТ]
 
 Читалка книг FB2 и EPUB для терминала.
 

@@ -434,3 +434,91 @@ describe("EPUB на экране", () => {
     expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("совпадение 1 из");
   });
 });
+
+describe("синхронизация из читалки", () => {
+  it("без настроенного сервера говорит, чего не хватает", async () => {
+    // Это и есть ответ на «не вижу, где синхронизация»: клавиша есть всегда,
+    // а сообщение объясняет, что настроить.
+    const ui = await open();
+    await ui.press("S");
+    const status = ui.terminal.line(ui.terminal.rows - 1);
+    expect(status).toContain("[sync]");
+    expect(status).toContain("не настроена");
+  });
+
+  it("сообщает о начале, потом об исходе", async () => {
+    let release: (v: { text: string }) => void = () => {};
+    const ui = await open({
+      syncNow: () =>
+        new Promise<{ text: string }>((resolve) => {
+          release = resolve;
+        }),
+    });
+
+    await ui.press("S");
+    // Обмен идёт по сети; молчащая читалка выглядела бы зависшей.
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("синхронизирую");
+
+    release({ text: "синхронизировано" });
+    await ui.settle();
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("синхронизировано");
+  });
+
+  it("подхватывает закладку, поставленную на другом устройстве", async () => {
+    // Иначе непонятно, сработало ли: закладка появилась бы только после
+    // перезапуска читалки.
+    const ui = await open({
+      syncNow: async () => ({
+        text: "синхронизировано",
+        bookmarks: [{ block: 2, at: 100, name: "с телефона" }],
+      }),
+    });
+    await ui.press("S");
+    await ui.settle();
+    expect(ui.reader.bookmarks.map((m) => m.name)).toEqual(["с телефона"]);
+
+    // И она сразу видна в списке закладок, а не после перезапуска.
+    await ui.press("'");
+    expect(ui.terminal.text()).toContain("с телефона");
+  });
+
+  it("отправляет то место, где читатель сейчас, а не сохранённое", async () => {
+    let sent = -1;
+    const ui = await open({
+      syncNow: async (block: number) => {
+        sent = block;
+        return { text: "готово" };
+      },
+    });
+    await ui.press("]");
+    const now = ui.reader.currentBlock();
+    await ui.press("S");
+    await ui.settle();
+    expect(sent).toBe(now);
+    expect(now).toBeGreaterThan(0);
+  });
+
+  it("неудачу показывает словами, а не молчанием", async () => {
+    const ui = await open({
+      syncNow: async () => ({ text: "не вышло: сервер недоступен" }),
+    });
+    await ui.press("S");
+    await ui.settle();
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("сервер недоступен");
+  });
+});
+
+describe("версия на виду", () => {
+  it("справка по ? называет версию", async () => {
+    const ui = await open({ version: "9.9.9" });
+    await ui.press("?");
+    expect(ui.terminal.text()).toContain("fb2read 9.9.9");
+  });
+
+  it("и перечисляет клавишу синхронизации", async () => {
+    const ui = await open();
+    // Справка длиннее экрана, а синхронизация в конце списка: докручиваем.
+    await ui.press("?", "G");
+    expect(ui.terminal.text()).toContain("синхронизировать с сервером");
+  });
+});

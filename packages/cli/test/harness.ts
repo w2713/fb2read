@@ -219,12 +219,21 @@ export async function harness(
 /** Собирает список книг поверх поддельного терминала. */
 export async function libraryHarness(
   entries: ChooserEntry[],
-  options: { theme?: string; mouse?: boolean; rows?: number; columns?: number } = {},
+  options: {
+    theme?: string;
+    mouse?: boolean;
+    rows?: number;
+    columns?: number;
+    onSync?: () => Promise<{ text: string; entries?: ChooserEntry[] }>;
+  } = {},
 ): Promise<ChooserHarness> {
   const terminal = new FakeTerminal(options.rows ?? 24, options.columns ?? 80);
   const session = new Session(terminal);
   session.begin(options.mouse ?? true);
-  const chooser = new Chooser(entries, new Theme(options.theme ?? "night"), options.mouse ?? true);
+  const chooser = new Chooser(entries, new Theme(options.theme ?? "night"), options.mouse ?? true, {
+    ...(options.onSync ? { onSync: options.onSync } : {}),
+    requestPaint: () => session.paint(),
+  });
   const shown = session.show(chooser).then(() => {
     session.end();
     return chooser.picked;

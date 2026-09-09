@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { ArgsError, VERSION, parseCliArgs } from "../src/args.js";
+import { ArgsError, HELP, VERSION, parseCliArgs } from "../src/args.js";
 
 describe("версия", () => {
   it("совпадает с той, что в пакете", () => {
@@ -70,5 +70,17 @@ describe("аргументы", () => {
   it("отвергает неизвестный ключ и лишний аргумент", () => {
     expect(() => parseCliArgs(["--летать"])).toThrow(ArgsError);
     expect(() => parseCliArgs(["одна.fb2", "вторая.fb2"])).toThrow(ArgsError);
+  });
+});
+
+describe("справка", () => {
+  it("называет версию: по ней понятно, что именно установлено", () => {
+    expect(HELP).toContain(VERSION);
+  });
+
+  it("перечисляет команды синхронизации", () => {
+    for (const command of ["sync", "push", "pull", "remote"]) {
+      expect(HELP).toContain(command);
+    }
   });
 });

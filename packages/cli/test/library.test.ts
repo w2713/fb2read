@@ -203,3 +203,61 @@ describe("книга, которая не открылась", () => {
     expect(await ui.picked()).toBeNull();
   });
 });
+
+describe("синхронизация из списка", () => {
+  it("подсказка называет клавишу, когда сервер настроен", async () => {
+    const ui = await libraryHarness(BOOKS, { onSync: async () => ({ text: "готово" }) });
+    // Именно это отвечает на «не вижу, где синхронизация»: клавиша названа
+    // прямо на экране, а не только в README.
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("S — синхронизировать");
+  });
+
+  it("без сервера подсказка прежняя и не обещает лишнего", async () => {
+    const ui = await libraryHarness(BOOKS);
+    expect(ui.terminal.line(ui.terminal.rows - 1)).not.toContain("синхронизировать");
+  });
+
+  it("по S сообщает о начале, потом об исходе", async () => {
+    let release: (v: { text: string }) => void = () => {};
+    const ui = await libraryHarness(BOOKS, {
+      onSync: () => new Promise((resolve) => (release = resolve)),
+    });
+    await ui.press("S");
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("синхронизирую");
+
+    release({ text: "синхронизировано 3, обновилось 1" });
+    await ui.settle();
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("обновилось 1");
+  });
+
+  it("обновляет сам список, а не только подпись", async () => {
+    const ui = await libraryHarness(BOOKS, {
+      onSync: async () => ({
+        text: "готово",
+        entries: [
+          ...BOOKS,
+          { path: "", title: "Приехала с сервера", author: "", percent: null, remote: "d".repeat(64) },
+        ],
+      }),
+    });
+    await ui.press("S");
+    await ui.settle();
+    expect(ui.terminal.text()).toContain("Приехала с сервера");
+    expect(ui.terminal.line(0)).toContain("4 книги");
+  });
+
+  it("без настроенного сервера объясняет, чего не хватает", async () => {
+    const ui = await libraryHarness(BOOKS);
+    await ui.press("S");
+    await ui.settle();
+    expect(ui.terminal.line(ui.terminal.rows - 1)).toContain("[sync]");
+  });
+
+  it("S не выбирает книгу и не закрывает список", async () => {
+    const ui = await libraryHarness(BOOKS, { onSync: async () => ({ text: "готово" }) });
+    await ui.press("S");
+    await ui.settle();
+    expect(ui.chooser.done).toBe(false);
+    expect(ui.chooser.picked).toBeNull();
+  });
+});

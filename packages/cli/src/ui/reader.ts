@@ -80,6 +80,18 @@ export interface ReaderOptions {
   /** Сохранение закладок наружу. */
   saveBookmarks?: (marks: Bookmark[]) => void;
   /**
+   * Синхронизация этой книги по требованию читателя.
+   *
+   * Возвращает готовую к показу строку — и когда получилось, и когда нет.
+   * Сеть здесь же, где и всё остальное платформенное: читалка о ней не знает.
+   */
+  syncNow?: (
+    block: number,
+    bookmarks: Bookmark[],
+  ) => Promise<{ text: string; bookmarks?: Bookmark[] }>;
+  /** Версия читалки: показывается в заголовке справки и в сведениях. */
+  version?: string;
+  /**
    * Выгрузка закладок в файл.
    *
    * Текст готовит ядро, а куда его положить, знает только платформа, —
@@ -471,6 +483,9 @@ export class Reader {
       case "image":
         void this.openVisibleImage();
         break;
+      case "sync":
+        void this.runSync();
+        break;
       case "search":
         this.startSearch();
         break;
@@ -606,7 +621,9 @@ export class Reader {
     const rows = helpRows(this.bindings);
     const width = rows.reduce((max, [keys]) => Math.max(max, strWidth(keys)), 0) + 2;
     this.openPopup({
-      title: "Клавиши",
+      // Версия в заголовке справки: это первое место, куда смотрят, когда
+      // надо сказать, какая читалка стоит.
+      title: this.options.version ? `Клавиши — fb2read ${this.options.version}` : "Клавиши",
       items: rows.map(([keys, text]) => keys + " ".repeat(width - strWidth(keys)) + text),
       onDone: () => {},
     });
@@ -912,6 +929,32 @@ export class Reader {
     }
     const block = this.book.blocks.find((b) => b.kind === "image" && b.src === src);
     if (block) await this.showImage(block);
+  }
+
+  /**
+   * Синхронизация по нажатию.
+   *
+   * Сообщение о начале показывается сразу: обмен идёт по сети и может занять
+   * секунду-другую, а молчащая читалка выглядит зависшей.
+   */
+  private async runSync(): Promise<void> {
+    if (!this.options.syncNow) {
+      this.message = "синхронизация не настроена: раздел [sync] в конфиге, подробности в README";
+      return;
+    }
+    this.message = "синхронизирую…";
+    this.options.requestPaint?.();
+    // Позицию и закладки берём прямо сейчас: читатель мог пролистать книгу
+    // с прошлого сохранения, и отправлять устаревшее место незачем.
+    const got = await this.options.syncNow(this.currentBlock(), this.bookmarks);
+    // Закладки, поставленные на другом устройстве, должны появиться сразу, а
+    // не после перезапуска, — иначе непонятно, что синхронизация сработала.
+    if (got.bookmarks) {
+      this.bookmarks = got.bookmarks;
+      this.markedBlocks = new Set(this.liveMarks.map((m) => m.block));
+    }
+    this.message = got.text;
+    this.options.requestPaint?.();
   }
 
   private async showImage(block: Block): Promise<void> {
