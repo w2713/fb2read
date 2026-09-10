@@ -275,8 +275,21 @@ books.example.org {
 
 ## Настройки
 
-`fb2read --write-config` кладёт образец в `~/.config/fb2read/config.ini`
-со всеми действиями и их клавишами по умолчанию:
+`fb2read --write-config` кладёт образец со всеми действиями и их клавишами по
+умолчанию. Где именно — зависит от системы:
+
+| Система | Настройки | Позиции и закладки |
+|---|---|---|
+| Linux, macOS | `~/.config/fb2read/config.ini` | `~/.local/share/fb2read/positions.json` |
+| Windows | `%APPDATA%\fb2read\config.ini` | `%LOCALAPPDATA%\fb2read\positions.json` |
+
+На Linux и macOS чтутся `XDG_CONFIG_HOME` и `XDG_DATA_HOME`, если заданы, —
+там же лежит состояние эталонной версии на Python, так что обе читалки видят
+одни и те же позиции. Книги, скачанные с сервера синхронизации, ложатся в
+`~/Books/fb2read` (на Windows — в `Books\fb2read` в папке пользователя);
+другое место задаётся переменной `FB2READ_LIBRARY`.
+
+Образец выглядит так:
 
 ```ini
 [reader]

@@ -11,7 +11,7 @@
  */
 
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { hostname } from "node:os";
+import { homedir, hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 import {
   SyncClient,
@@ -31,7 +31,11 @@ import type { JsonFileStore } from "./store.js";
 
 /** Куда складывать книги, скачанные с сервера. */
 export function libraryDir(): string {
-  return process.env["FB2READ_LIBRARY"] ?? join(process.env["HOME"] ?? ".", "Books", "fb2read");
+  // Домашний каталог берётся у системы, а не из HOME: на Windows такой
+  // переменной обычно нет вовсе, и книги ложились бы в «Books\fb2read» рядом
+  // с тем каталогом, откуда запустили читалку, — то есть каждый раз в новом
+  // месте.
+  return process.env["FB2READ_LIBRARY"] ?? join(homedir(), "Books", "fb2read");
 }
 
 /** Готовые к работе настройки синхронизации. */

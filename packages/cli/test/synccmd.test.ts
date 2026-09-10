@@ -9,6 +9,7 @@
 
 import { createServer, type Server } from "node:http";
 import { mkdtempSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -123,5 +124,37 @@ describe("синхронизация по требованию", () => {
     });
     const got = await syncOnDemand(settings, store(), KEY, meta, "/книги/к.fb2", 5, []);
     expect(got.text).toContain("часы");
+  });
+});
+
+describe("каталог для скачанных книг", () => {
+  it("берётся у системы, а не из HOME", async () => {
+    // На Windows переменной HOME обычно нет, и книги ложились бы в
+    // «Books\fb2read» рядом с тем каталогом, откуда запустили читалку,
+    // то есть каждый раз в новом месте.
+    const { libraryDir } = await import("../src/sync.js");
+    const было = process.env["HOME"];
+    const своё = process.env["FB2READ_LIBRARY"];
+    delete process.env["HOME"];
+    delete process.env["FB2READ_LIBRARY"];
+    try {
+      expect(libraryDir()).toBe(join(homedir(), "Books", "fb2read"));
+      expect(libraryDir().startsWith(".")).toBe(false);
+    } finally {
+      if (было !== undefined) process.env["HOME"] = было;
+      if (своё !== undefined) process.env["FB2READ_LIBRARY"] = своё;
+    }
+  });
+
+  it("своё место в FB2READ_LIBRARY главнее", async () => {
+    const { libraryDir } = await import("../src/sync.js");
+    const было = process.env["FB2READ_LIBRARY"];
+    process.env["FB2READ_LIBRARY"] = join("тут", "книги");
+    try {
+      expect(libraryDir()).toBe(join("тут", "книги"));
+    } finally {
+      if (было === undefined) delete process.env["FB2READ_LIBRARY"];
+      else process.env["FB2READ_LIBRARY"] = было;
+    }
   });
 });
