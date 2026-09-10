@@ -16,6 +16,8 @@
   --accent: #2d5db5;
   --rule: #e2e5ea;
   --column: 34rem;
+  /* Размер текста в книге. Меняется читателем, поэтому и вынесен. */
+  --text: 1.125rem;
 }
 
 :root[data-theme="night"] {
@@ -278,6 +280,15 @@ body.dragging {
 
 /* --- книга ---------------------------------------------------------------- */
 
+/*
+ * Размер задаётся здесь, а не на body: иначе вместе с текстом росли бы панель,
+ * полка и подписи, а читатель просил крупнее только книгу. Всё внутри мерится
+ * в em — от размера текста, — поэтому заголовки и отступы растут вместе с ним.
+ */
+#book {
+  font-size: var(--text);
+}
+
 #book h1,
 #book h2,
 #book h3,
@@ -287,20 +298,20 @@ body.dragging {
   font-family: system-ui, sans-serif;
   line-height: 1.3;
   text-align: center;
-  margin: 2.5rem 0 1.2rem;
+  margin: 2.2em 0 1.05em;
 }
 
 #book h1 {
-  font-size: 1.5rem;
+  font-size: 1.35em;
 }
 #book h2 {
-  font-size: 1.3rem;
+  font-size: 1.15em;
 }
 #book h3,
 #book h4,
 #book h5,
 #book h6 {
-  font-size: 1.15rem;
+  font-size: 1.02em;
 }
 
 #book p {

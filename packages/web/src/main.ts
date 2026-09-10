@@ -22,6 +22,7 @@ import {
 } from "@fb2read/core";
 import { IdbStore, type BookMeta } from "./db.js";
 import { firstFrom, step } from "./find.js";
+import { DEFAULT_TEXT, atEdge, stepSize, textSize } from "./look.js";
 import { marked, removeMark, sortedMarks, toggleMark } from "./marks.js";
 import { keepPosition, topmost, type Keeper } from "./position.js";
 import { renderBook, renderOne } from "./render.js";
@@ -53,11 +54,14 @@ const marksEmpty = document.querySelector<HTMLElement>("#marks-empty")!;
 const markButton = document.querySelector<HTMLButtonElement>("#mark")!;
 const backButton = document.querySelector<HTMLButtonElement>("#back")!;
 const progressLabel = document.querySelector<HTMLElement>("#progress")!;
+const smaller = document.querySelector<HTMLButtonElement>("#smaller")!;
+const bigger = document.querySelector<HTMLButtonElement>("#bigger")!;
 const shelf = document.querySelector<HTMLElement>("#shelf")!;
 const greeting = document.querySelector<HTMLElement>("#greeting")!;
 const storageLine = document.querySelector<HTMLElement>("#storage")!;
 const installLine = document.querySelector<HTMLElement>("#install")!;
 const updateLine = document.querySelector<HTMLElement>("#update")!;
+const versionLine = document.querySelector<HTMLElement>("#version")!;
 const syncNow = document.querySelector<HTMLButtonElement>("#sync-now")!;
 const syncSetup = document.querySelector<HTMLButtonElement>("#sync-setup")!;
 const syncForm = document.querySelector<HTMLFormElement>("#sync-form")!;
@@ -509,6 +513,91 @@ function goBack(): void {
   backButton.hidden = !open?.back.length;
 }
 
+// --- размер текста ---------------------------------------------------------
+
+/** Размер, которым читают сейчас. */
+let size = DEFAULT_TEXT;
+
+/**
+ * Меняет размер текста, не теряя места в книге.
+ *
+ * Крупнее шрифт — больше строк, и всё, что ниже, съезжает: прокрутка в
+ * пикселях после этого показывает совсем другое место. Поэтому запоминается
+ * абзац, который читают, и после перевёрстки читалка возвращается к нему. Без
+ * этого настройка стоила бы читателю потерянной страницы при каждом нажатии.
+ */
+async function applySize(next: number): Promise<void> {
+  const anchor = open ? anchorAtTop() : null;
+  size = next;
+  document.documentElement.style.setProperty("--text", `${next}rem`);
+  showSizeEdges();
+  if (anchor) returnTo(anchor);
+  await store.saveSettings({ text: next });
+}
+
+/** За что держаться при перевёрстке: абзац и доля, на которой его читают. */
+interface Anchor {
+  block: number;
+  /** Насколько абзац уже ушёл за верхний край, в долях своей высоты. */
+  part: number;
+}
+
+/**
+ * Абзац у верхнего края вместе с долей, на которой его читают.
+ *
+ * Одного номера мало: абзац обычно початый, и вернуть его к краю началом —
+ * значит отмотать читателя к началу абзаца. Три нажатия подряд так уводили на
+ * два абзаца назад.
+ */
+function anchorAtTop(): Anchor | null {
+  const block = blockAtTop();
+  if (block === null) return null;
+  const node = article.querySelector<HTMLElement>(`[data-block="${block}"]`);
+  if (!node) return null;
+  const rect = node.getBoundingClientRect();
+  return { block, part: rect.height ? (rect.top - readingTop()) / rect.height : 0 };
+}
+
+/**
+ * Возвращает читателя туда же, откуда он смотрел.
+ *
+ * Доля, а не пиксели: крупнее шрифт — выше абзац, и та же доля означает ту же
+ * строку, а те же пиксели — уже другую.
+ */
+function returnTo(anchor: Anchor): void {
+  const node = article.querySelector<HTMLElement>(`[data-block="${anchor.block}"]`);
+  if (!node) return;
+  const rect = node.getBoundingClientRect();
+  window.scrollBy(0, rect.top - readingTop() - anchor.part * rect.height);
+  open?.keeper.moved(anchor.block);
+  showProgress(anchor.block);
+  showMarkState(anchor.block);
+}
+
+/**
+ * Какой абзац сейчас у верхнего края — по разметке, а не по памяти.
+ *
+ * Спрашивать хранителя нельзя: он узнаёт место от наблюдателя, а тот сообщает
+ * не сразу. При двух нажатиях подряд ответ оказывается вчерашним, и книга
+ * уезжает — измерено, на восемьсот пикселей. Разметка же говорит правду в тот
+ * самый миг, когда её спросили.
+ */
+function blockAtTop(): number | null {
+  const edge = readingTop();
+  return topmost(
+    [...article.querySelectorAll<HTMLElement>("[data-block]")].map((node) => ({
+      block: Number(node.dataset["block"]),
+      top: node.getBoundingClientRect().top - edge,
+    })),
+  );
+}
+
+/** Гасит кнопку на краю списка: жать её незачем. */
+function showSizeEdges(): void {
+  smaller.disabled = atEdge(size, -1);
+  bigger.disabled = atEdge(size, 1);
+}
+
 // --- темы ------------------------------------------------------------------
 
 async function applyTheme(theme: string): Promise<void> {
@@ -946,6 +1035,9 @@ article.addEventListener("click", (event) => {
   followNote(link.dataset["note"] ?? "");
 });
 
+smaller.addEventListener("click", () => void applySize(stepSize(size, -1)));
+bigger.addEventListener("click", () => void applySize(stepSize(size, 1)));
+
 document.querySelector("#theme")!.addEventListener("click", () => {
   const current = document.documentElement.getAttribute("data-theme") ?? "auto";
   void applyTheme(nextTheme(current));
@@ -1044,11 +1136,19 @@ document.addEventListener("drop", (event) => {
   if (file) void openFile(file);
 });
 
-// Тема запомнена с прошлого раза — применяем до первой отрисовки книги.
+// Тема и размер запомнены с прошлого раза — применяем до первой отрисовки
+// книги, иначе текст успел бы мигнуть чужим размером.
 void store.loadSettings().then((settings) => {
   const theme = typeof settings.theme === "string" ? settings.theme : "auto";
   if (theme !== "auto") document.documentElement.setAttribute("data-theme", theme);
+  size = textSize(settings["text"]);
+  document.documentElement.style.setProperty("--text", `${size}rem`);
+  showSizeEdges();
 });
+
+// Версия — на первом экране. С домашнего экрана адресной строки нет, и узнать,
+// доехало ли обновление до телефона, иначе неоткуда.
+versionLine.textContent = `fb2read ${__VERSION__}`;
 
 // Полка рисуется сразу: ради неё читалку и открывают во второй раз.
 void fillShelf();

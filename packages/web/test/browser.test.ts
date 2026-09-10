@@ -280,6 +280,34 @@ async function readAt(page: Page, block: number): Promise<void> {
  * Не относительно окна: сверху висит панель, и абзац, оказавшийся под ней,
  * читателю не виден, сколько бы ни было ноль его координата.
  */
+/**
+ * Какой абзац у верхнего края — по тому же правилу, что и в читалке.
+ *
+ * Спрашивать записанное в хранилище нельзя: оно приходит от наблюдателя с
+ * задержкой, и сразу после нажатия там ещё вчерашнее число. А обещание читателю
+ * ровно такое: тот абзац, на который он смотрел, остался тем, на который он
+ * смотрит.
+ */
+function topBlock(page: Page): Promise<number | null> {
+  return page.evaluate(() => {
+    const edge = Math.max(document.querySelector("#top")!.getBoundingClientRect().bottom, 0);
+    let above: { block: number; top: number } | null = null;
+    let below: { block: number; top: number } | null = null;
+    for (const node of document.querySelectorAll<HTMLElement>("[data-block]")) {
+      const entry = {
+        block: Number(node.dataset["block"]),
+        top: node.getBoundingClientRect().top - edge,
+      };
+      if (entry.top <= 0) {
+        if (!above || entry.top > above.top) above = entry;
+      } else if (!below || entry.top < below.top) {
+        below = entry;
+      }
+    }
+    return (above ?? below)?.block ?? null;
+  });
+}
+
 function blockTop(page: Page, block: number): Promise<number> {
   return page.evaluate((n) => {
     const node = document.querySelector(`[data-block="${n}"]`)!;
@@ -651,6 +679,106 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     const where = await blockTop(page, saved!);
     expect(where).toBeLessThan(40);
     expect(where).toBeGreaterThan(-100);
+    await page.close();
+  }, SLOW);
+
+  it("размер текста меняется", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    const размер = () =>
+      page.evaluate(() => getComputedStyle(document.querySelector("#book")!).fontSize);
+    const было = await размер();
+    await page.click("#bigger");
+    expect(Number.parseFloat(await размер())).toBeGreaterThan(Number.parseFloat(было));
+    await page.close();
+  }, SLOW);
+
+  it("смена размера не уносит с места и там, где браузер не придерживает", async () => {
+    // Chromium сам придерживает содержимое при перевёрстке (scroll anchoring), и
+    // поэтому изъяна не показывает: абзац уезжает на шесть пикселей. В Safari —
+    // а телефон читателя как раз на нём — придержки нет, и то же нажатие уносит
+    // на тысячи пикселей: измерено, на 110-м абзаце 2467.
+    //
+    // Поэтому придержка здесь выключается нарочно: проверяется поведение в том
+    // браузере, в котором книгу и читают.
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await page.addStyleTag({
+      content: "html, body, #book, #book * { overflow-anchor: none !important; }",
+    });
+    await readAt(page, 80);
+
+    const до = await topBlock(page);
+    expect(до).not.toBeNull();
+
+    for (let i = 0; i < 3; i += 1) await page.click("#bigger");
+
+    // Обещание: читатель не уехал больше, чем на строку. Точного равенства
+    // требовать нельзя — на границе абзацев округление честно перекидывает
+    // номер на соседний. А с потерянным местом разница была бы в двадцать
+    // абзацев: измерено, восемьсот тридцать пикселей.
+    const после = await topBlock(page);
+    expect(после).not.toBeNull();
+    expect(Math.abs(после! - до!)).toBeLessThanOrEqual(1);
+    expect(Math.abs(await blockTop(page, до!))).toBeLessThan(60);
+    await page.close();
+  }, SLOW);
+
+  it("размер текста не трогает панель и полку", async () => {
+    // Читатель просил крупнее книгу, а не крупнее весь интерфейс.
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    const панель = () =>
+      page.evaluate(() => getComputedStyle(document.querySelector("#bar")!).fontSize);
+    const было = await панель();
+    await page.click("#bigger");
+    await page.click("#bigger");
+    expect(await панель()).toBe(было);
+    await page.close();
+  }, SLOW);
+
+  it("размер текста переживает перезагрузку", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await page.click("#bigger");
+    const выбранный = await page.evaluate(
+      () => getComputedStyle(document.querySelector("#book")!).fontSize,
+    );
+
+    await page.reload();
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+    await page.click("#shelf .shelf-open");
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    expect(
+      await page.evaluate(() => getComputedStyle(document.querySelector("#book")!).fontSize),
+    ).toBe(выбранный);
+    await page.close();
+  }, SLOW);
+
+  it("на самом крупном размере кнопка гаснет, а не заворачивает список", async () => {
+    // Иначе одно лишнее нажатие давало бы самый мелкий шрифт.
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    for (let i = 0; i < 8; i += 1) {
+      if (await page.isEnabled("#bigger")) await page.click("#bigger");
+    }
+    expect(await page.isDisabled("#bigger")).toBe(true);
+    const крупнейший = await page.evaluate(
+      () => getComputedStyle(document.querySelector("#book")!).fontSize,
+    );
+    expect(Number.parseFloat(крупнейший)).toBeGreaterThan(20);
+    await page.close();
+  }, SLOW);
+
+  it("версия читалки видна на первом экране", async () => {
+    // С домашнего экрана адресной строки нет: узнать, доехало ли обновление до
+    // телефона, иначе неоткуда — приходится верить на слово.
+    const page = await browser.newPage();
+    await page.goto(base);
+    const { version } = JSON.parse(
+      readFileSync(join(resolve(here, ".."), "package.json"), "utf-8"),
+    ) as { version: string };
+    expect(await page.textContent("#version")).toBe(`fb2read ${version}`);
     await page.close();
   }, SLOW);
 

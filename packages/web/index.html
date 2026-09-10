@@ -37,6 +37,12 @@
         <!-- Появляется только после перехода по сноске: возвращаться иначе некуда. -->
         <button type="button" id="back" title="Вернуться из сноски" hidden>Назад</button>
         <span id="progress"></span>
+        <button type="button" id="smaller" title="Мельче шрифт" aria-label="Мельче шрифт">
+          А&minus;
+        </button>
+        <button type="button" id="bigger" title="Крупнее шрифт" aria-label="Крупнее шрифт">
+          А+
+        </button>
         <button type="button" id="theme" title="Сменить тему" aria-label="Сменить тему">
           Тема
         </button>
@@ -104,6 +110,7 @@
         </section>
         <p id="install" class="hint" hidden></p>
         <p id="update" class="hint" hidden></p>
+        <p id="version" class="hint"></p>
       </section>
       <article id="book" hidden></article>
     </main>
