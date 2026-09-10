@@ -1035,6 +1035,19 @@ function watchUpdate(reg: ServiceWorkerRegistration): void {
   const offer = (worker: ServiceWorker | null): void => {
     // Первая установка — это не обновление: подменять нечего.
     if (!worker || !navigator.serviceWorker.controller) return;
+
+    // Книга не открыта — обновляемся сами, не спрашивая.
+    //
+    // Спрашивать было плохой мыслью: строчка внизу первого экрана, под полкой
+    // и подсказками, на телефоне попросту не попадается на глаза, и читалка
+    // оставалась вчерашней. Спрашивать есть смысл только когда книга открыта:
+    // подменять файлы посреди чтения нельзя.
+    if (article.hidden) {
+      asked = true;
+      worker.postMessage("обновиться");
+      return;
+    }
+
     updateLine.hidden = false;
     updateLine.textContent = "Готово обновление читалки. ";
     const button = document.createElement("button");
