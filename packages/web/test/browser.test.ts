@@ -248,12 +248,22 @@ async function scrollToBlock(page: Page, block: number): Promise<void> {
  * что читают прежнее место, и закладка встала бы не туда.
  */
 async function readAt(page: Page, block: number): Promise<void> {
-  const before = await page.textContent("#progress");
   await scrollToBlock(page, block);
+  // Ждём не «процент изменился», а «процент стал тем самым».
+  //
+  // Изменение — слишком слабый признак: процент дёргается и от схлопывания
+  // панели, которая сдвигает текст, а не только от прокрутки. Проверка успевала
+  // нажать клавишу до того, как читалка поймёт, где она, и закладка вставала не
+  // туда. Соседний абзац засчитывается: который из двух — дело округления.
   await page.waitForFunction(
-    (was) => document.querySelector("#progress")!.textContent !== was,
-    before,
-    { timeout: 5000 },
+    (n) => {
+      const total = document.querySelectorAll("#book [data-block]").length;
+      const percent = (at: number) => Math.round((100 * at) / Math.max(total - 1, 1));
+      const now = document.querySelector("#progress")!.textContent;
+      return [n - 1, n, n + 1].some((at) => now === `${percent(at)}%`);
+    },
+    block,
+    { timeout: 10_000 },
   );
 }
 

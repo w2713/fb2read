@@ -18,8 +18,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Версия не задаётся: она закреплена в package.json полем packageManager,
+      # и указывать её дважды action не позволяет.
       - uses: pnpm/action-setup@v4
-        with: { version: 10 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - run: pnpm install --frozen-lockfile
@@ -64,8 +65,9 @@ jobs:
             targets: darwin-x64 darwin-arm64
     steps:
       - uses: actions/checkout@v4
+      # Версия не задаётся: она закреплена в package.json полем packageManager,
+      # и указывать её дважды action не позволяет.
       - uses: pnpm/action-setup@v4
-        with: { version: 10 }
       - uses: actions/setup-node@v4
         with: { node-version: 22, cache: pnpm }
       - uses: oven-sh/setup-bun@v2
@@ -136,8 +138,9 @@ jobs:
       NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
     steps:
       - uses: actions/checkout@v4
+      # Версия не задаётся: она закреплена в package.json полем packageManager,
+      # и указывать её дважды action не позволяет.
       - uses: pnpm/action-setup@v4
-        with: { version: 10 }
       - uses: actions/setup-node@v4
         with:
           node-version: 22

@@ -6,6 +6,7 @@
   "engines": {
     "node": ">=20"
   },
+  "packageManager": "pnpm@10.33.0",
   "scripts": {
     "build": "tsc -b packages/core && pnpm --filter fb2read build && pnpm --filter fb2read-server build && pnpm --filter @fb2read/web build",
     "test": "vitest run",

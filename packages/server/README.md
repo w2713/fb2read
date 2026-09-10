@@ -57,8 +57,60 @@ books.example.org {
 }
 ```
 
+Для nginx строк больше, и одна из них обязательна:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name books.example.org;
+
+    ssl_certificate     /etc/letsencrypt/live/books.example.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/books.example.org/privkey.pem;
+
+    # Без этого nginx рубит всё тяжелее мегабайта, а книга едет файлом целиком.
+    # Предел ставится выше серверного (FB2READ_SERVER_MAX_MB, по умолчанию 200):
+    # тогда отказ придёт от сервера — внятными словами и с заголовками CORS, —
+    # а не голым 413 от nginx, который браузер покажет как «сервер недоступен».
+    client_max_body_size 210m;
+    proxy_request_buffering off;
+
+    location / {
+        proxy_pass http://127.0.0.1:8787;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+}
+```
+
 Пускать сервер в интернет без TLS не стоит: токен уходит в заголовке, и по
-открытому HTTP его увидит любой по дороге.
+открытому HTTP его увидит любой по дороге. Для читалки в браузере TLS и вовсе
+обязателен: страница живёт на `https://`, и запрос на `http://` браузер не
+выпустит — молча.
+
+## В контейнере
+
+```bash
+git clone https://github.com/w2713/fb2read.git && cd fb2read
+docker build -f packages/server/Dockerfile -t fb2read-server .
+
+docker volume create fb2read-data
+docker run -d --name fb2read --restart unless-stopped \
+  -p 127.0.0.1:8787:8787 -v fb2read-data:/data \
+  -e FB2READ_SERVER_TOKENS="я:$(openssl rand -hex 32)" \
+  -e FB2READ_SERVER_ORIGIN="https://w2713.github.io" \
+  fb2read-server
+```
+
+Именованный том, а не каталог с диска: внутри сервер работает не от
+суперпользователя, и подключённый каталог хоста ему обычно недоступен на
+запись. Если каталог всё же нужен, узнайте, от кого работает сервер
+(`docker run --rm fb2read-server id`), и отдайте каталог ему.
+
+`FB2READ_SERVER_ORIGIN` нужен только для читалки в браузере; без него браузер к
+серверу не постучится вовсе.
 
 Настройка читалки и остальное — в [README проекта](https://github.com/w2713/fb2read#синхронизация).
 
