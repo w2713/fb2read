@@ -20,7 +20,7 @@ import {
 } from "@fb2read/core";
 import { APP, ArgsError, HELP, VERSION, parseCliArgs, type Args } from "./args.js";
 import { FileSource } from "./fsSource.js";
-import { libraryLines, scanDir } from "./library.js";
+import { addToLibrary, libraryLines, scanDir } from "./library.js";
 import { configFile } from "./paths.js";
 import { JsonFileStore } from "./store.js";
 import {
@@ -29,6 +29,8 @@ import {
   cmdRemote,
   cmdSync,
   downloadBook,
+  keepOnServer,
+  libraryDir,
   remoteOnly,
   syncAllQuiet,
   syncOnDemand,
@@ -144,7 +146,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       case "remote":
         return cmdRemote(config.sync);
       case "push":
-        return cmdPush(config.sync, args.file, store);
+        return cmdPush(config.sync, args.file, args.all, store);
       case "pull":
         return cmdPull(config.sync, args.file, args.all, store);
     }
@@ -209,6 +211,15 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     // `fb2read ~/books | grep`, и экран при этом не занимается.
     if (!process.stdout.isTTY) return printLines(libraryLines(entries));
 
+    // Список пересобирается целиком: и прогресс, и книги с сервера могли
+    // измениться, а подправлять их на месте — искать ошибок на ровном месте.
+    const rebuild = async (): Promise<ChooserEntry[]> => {
+      const fresh = args.file
+        ? await scanDir(args.file, store)
+        : (await store.recent()).map((e) => ({ ...e }));
+      return addRemote(fresh);
+    };
+
     const after = await runLibrary(new NodeTerminal(), {
       entries,
       prefs,
@@ -216,9 +227,19 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       fromStart: args.fromStart,
       exportBookmarks,
       version: VERSION,
+      add: async (where: string) => {
+        const got = await addToLibrary(where, libraryDir(), store);
+        return got.count ? { text: got.text, entries: await rebuild() } : { text: got.text };
+      },
       ...(librarySync
         ? {
             download: (hash: string, name: string) => downloadBook(librarySync, store, hash, name),
+            ...(librarySync.upload
+              ? {
+                  keep: (path: string, meta: { hash: string; title: string; author: string }) =>
+                    keepOnServer(librarySync, path, meta),
+                }
+              : {}),
             syncNow:
               (
                 key: string,
@@ -230,12 +251,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
             syncAll: async () => {
               try {
                 const text = await syncAllQuiet(librarySync, store);
-                // Прогресс мог измениться, и книги на сервере тоже: список
-                // пересобирается целиком, а не подправляется на месте.
-                const fresh = args.file
-                  ? await scanDir(args.file, store)
-                  : (await store.recent()).map((e) => ({ ...e }));
-                return { text, entries: await addRemote(fresh) };
+                return { text, entries: await rebuild() };
               } catch (e) {
                 return { text: `не вышло: ${(e as Error).message}` };
               }
@@ -315,6 +331,16 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     );
     syncNote = outcome.note;
   }
+
+  // Книга уезжает на сервер целиком, пока её читают: сорок мегабайт по узкому
+  // каналу идут долго, и ждать этого читателю ни на входе, ни на выходе
+  // незачем. Обещание не отвергается никогда — внутри всё поймано.
+  let uploaded: string | null = null;
+  const uploading = sync?.upload
+    ? keepOnServer(sync, path, { hash: book.hash, title: book.title, author: book.author }).then(
+        (note) => (uploaded = note),
+      )
+    : null;
 
   const start = args.fromStart ? 0 : await store.loadPosition(key);
   const bookmarks = await store.loadBookmarks(key);
@@ -406,6 +432,14 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       path,
     );
     if (!outcome.state) fail(`синхронизация не удалась: ${outcome.note}`);
+  }
+
+  // Выгрузка книги почти всегда закончилась, пока читали. Если нет — ждём,
+  // предупредив: иначе выход выглядел бы зависанием.
+  if (uploading) {
+    if (uploaded === null) printLines(["дожидаюсь выгрузки книги на сервер…"]);
+    await uploading;
+    if (uploaded) printLines([uploaded]);
   }
   return 0;
 }

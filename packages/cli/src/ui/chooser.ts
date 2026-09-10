@@ -10,6 +10,7 @@
 import { cutToWidth, plural, strWidth } from "@fb2read/core";
 import type { MouseEvent } from "../term/input.js";
 import type { Screen } from "../term/screen.js";
+import { Prompt } from "./prompt.js";
 import type { Theme } from "./theme.js";
 import type { View } from "./view.js";
 
@@ -47,6 +48,8 @@ export class Chooser implements View {
   private finished = false;
   /** Сообщение об ошибке во весь экран: книга не открылась. */
   private failure: string | null = null;
+  /** Строка ввода внизу: путь к добавляемой книге. */
+  private prompt: Prompt | null = null;
 
   constructor(
     private entries: ChooserEntry[],
@@ -60,6 +63,8 @@ export class Chooser implements View {
      */
     private readonly hooks: {
       onSync?: () => Promise<{ text: string; entries?: ChooserEntry[] }>;
+      /** Добавление книги или каталога по указанному пути. */
+      onAdd?: (path: string) => Promise<{ text: string; entries?: ChooserEntry[] }>;
       requestPaint?: () => void;
     } = {},
   ) {}
@@ -68,9 +73,9 @@ export class Chooser implements View {
     return this.finished;
   }
 
-  /** Курсор на экране списка не нужен. */
+  /** Курсор нужен только когда внизу ждут путь к книге. */
   get promptCursor(): number | null {
-    return null;
+    return this.prompt ? this.prompt.cursorColumn() : null;
   }
 
   /** Сколько строк списка помещается: строка заголовка, пустая и подсказка. */
@@ -144,11 +149,18 @@ export class Chooser implements View {
       screen.put(i + 1, 0, row, this.attrFor(entry, index === this.cursor), this.columns - 1);
     }
 
-    const hint =
-      this.notice ||
-      (this.hooks.onSync
-        ? " Enter — читать,  S — синхронизировать,  q — выход "
-        : " Enter или клик — читать,  q — выход ");
+    if (this.prompt) {
+      this.prompt.draw(screen, this.theme);
+      return;
+    }
+
+    // Про щелчок говорится, только когда строка не занята другими клавишами:
+    // подсказка должна помещаться и в узком окне.
+    const keys = [this.hooks.onSync || this.hooks.onAdd ? " Enter — читать" : " Enter или клик — читать"];
+    if (this.hooks.onAdd) keys.push("a — добавить книгу");
+    if (this.hooks.onSync) keys.push("S — синхронизировать");
+    keys.push("q — выход ");
+    const hint = this.notice || keys.join(",  ");
     screen.put(
       this.rows - 1,
       0,
@@ -180,6 +192,13 @@ export class Chooser implements View {
   }
 
   key(name: string): void {
+    // Пока внизу ждут путь, клавиши уходят туда: иначе «q» в имени файла
+    // закрывала бы список.
+    if (this.prompt) {
+      if (this.prompt.key(name)) this.prompt = null;
+      return;
+    }
+
     if (this.failure !== null) {
       // Любое нажатие закрывает сообщение и возвращает к списку.
       this.failure = null;
@@ -202,6 +221,13 @@ export class Chooser implements View {
     }
     if (name === "S") {
       void this.runSync();
+      return;
+    }
+    if (name === "a" && this.hooks.onAdd) {
+      this.prompt = new Prompt("добавить книгу или каталог: ", (path) => {
+        if (path) void this.runAdd(path);
+        this.hooks.requestPaint?.();
+      });
       return;
     }
 
@@ -252,6 +278,22 @@ export class Chooser implements View {
     const got = await this.hooks.onSync();
     // Список мог измениться: прогресс подтянулся, а книги с сервера,
     // которых тут нет, могли появиться или пропасть.
+    if (got.entries) {
+      this.entries = got.entries;
+      this.clamp();
+    }
+    this.notice = ` ${got.text} `;
+    this.needsFullRedraw = true;
+    this.hooks.requestPaint?.();
+  }
+
+  /** Добавление книги по указанному пути и обновление списка. */
+  private async runAdd(path: string): Promise<void> {
+    if (!this.hooks.onAdd) return;
+    this.notice = " добавляю… ";
+    this.needsFullRedraw = true;
+    this.hooks.requestPaint?.();
+    const got = await this.hooks.onAdd(path);
     if (got.entries) {
       this.entries = got.entries;
       this.clamp();

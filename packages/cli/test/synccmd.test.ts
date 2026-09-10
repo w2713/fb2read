@@ -8,7 +8,7 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -58,6 +58,7 @@ beforeEach(async () => {
   settings = {
     url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
     auto: false,
+    upload: false,
     device: "ноутбук",
   };
 });
@@ -226,5 +227,218 @@ describe("скачивание книги", () => {
 
   it("имя с расширением оставляет как есть", async () => {
     expect(await pull("Война и мир.fb2")).toEqual(["Война и мир.fb2"]);
+  });
+});
+
+describe("выгрузка открытой книги", () => {
+  // Настоящий сервер брать сюда незачем: у него свои проверки. А вот молчание
+  // при неудаче — как раз то, чего быть не должно, и ловится оно только здесь.
+  const книга = new TextEncoder().encode(
+    '<?xml version="1.0" encoding="utf-8"?><FictionBook><description><title-info>' +
+      "<book-title>Анна Каренина</book-title></title-info></description>" +
+      "<body><section><p>Текст.</p></section></body></FictionBook>",
+  );
+
+  /** Сервер, который помнит, что ему положили. */
+  function raise(было: string[]): Promise<{
+    url: string;
+    uploaded: { hash: string; name: string; size: number }[];
+    close: () => Promise<void>;
+  }> {
+    const uploaded: { hash: string; name: string; size: number }[] = [];
+    const s = createServer((request, response) => {
+      const path = (request.url ?? "").split("?")[0]!;
+      if (request.method === "GET" && path === "/api/v1/books") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            books: было.map((hash) => ({ hash, name: "есть.fb2", size: 1, title: "", author: "", updatedAt: 1 })),
+          }),
+        );
+        return;
+      }
+      if (request.method === "PUT" && path.startsWith("/api/v1/books/")) {
+        const chunks: Buffer[] = [];
+        request.on("data", (c: Buffer) => chunks.push(c));
+        request.on("end", () => {
+          uploaded.push({
+            hash: path.slice("/api/v1/books/".length),
+            name: decodeURIComponent(String(request.headers["x-name"] ?? "")),
+            size: Buffer.concat(chunks).length,
+          });
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ ok: true }));
+        });
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    return new Promise((done) => {
+      s.listen(0, "127.0.0.1", () =>
+        done({
+          url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`,
+          uploaded,
+          close: () => new Promise<void>((r) => s.close(() => r())),
+        }),
+      );
+    });
+  }
+
+  async function keep(было: string[], hash = HASH) {
+    const { keepOnServer } = await import("../src/sync.js");
+    const file = join(dir, "Анна Каренина.fb2");
+    writeFileSync(file, книга);
+    const сервер = await raise(было);
+    try {
+      const note = await keepOnServer(
+        { ...settings, url: сервер.url, upload: true },
+        file,
+        { hash, title: "Анна Каренина", author: "Толстой" },
+      );
+      return { note, uploaded: сервер.uploaded };
+    } finally {
+      await сервер.close();
+    }
+  }
+
+  it("книга уезжает на сервер целиком и с именем", async () => {
+    const { note, uploaded } = await keep([]);
+    expect(uploaded).toHaveLength(1);
+    expect(uploaded[0]!.name).toBe("Анна Каренина.fb2");
+    expect(uploaded[0]!.size).toBe(книга.length);
+    expect(note).toContain("Анна Каренина");
+  });
+
+  it("книгу, которая уже там, второй раз не льёт", async () => {
+    // Иначе каждое открытие книги гнало бы её мегабайты по сети заново.
+    const { note, uploaded } = await keep([HASH]);
+    expect(uploaded).toEqual([]);
+    expect(note).toBe("");
+  });
+
+  it("недоступный сервер объясняет словами и не бросает", async () => {
+    const { keepOnServer } = await import("../src/sync.js");
+    const file = join(dir, "к.fb2");
+    writeFileSync(file, книга);
+    const note = await keepOnServer(
+      { ...settings, url: "http://127.0.0.1:1", upload: true },
+      file,
+      { hash: HASH, title: "Книга", author: "" },
+    );
+    expect(note).toMatch(/не удалось выгрузить/);
+  });
+});
+
+describe("выгрузка каталогом", () => {
+  const книга = (название: string) =>
+    new TextEncoder().encode(
+      '<?xml version="1.0" encoding="utf-8"?><FictionBook><description><title-info>' +
+        `<book-title>${название}</book-title></title-info></description>` +
+        "<body><section><p>Текст.</p></section></body></FictionBook>",
+    );
+
+  /** Сервер, помнящий выгруженное; список отдаёт то, что уже лежит. */
+  function raise(): Promise<{ url: string; names: string[]; close: () => Promise<void> }> {
+    const names: string[] = [];
+    const hashes = new Set<string>();
+    const s = createServer((request, response) => {
+      const path = (request.url ?? "").split("?")[0]!;
+      if (request.method === "GET" && path === "/api/v1/books") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            books: [...hashes].map((hash) => ({
+              hash, name: "х.fb2", size: 1, title: "", author: "", updatedAt: 1,
+            })),
+          }),
+        );
+        return;
+      }
+      if (request.method === "PUT" && path.startsWith("/api/v1/books/")) {
+        const chunks: Buffer[] = [];
+        request.on("data", (c: Buffer) => chunks.push(c));
+        request.on("end", () => {
+          hashes.add(path.slice("/api/v1/books/".length));
+          names.push(decodeURIComponent(String(request.headers["x-name"] ?? "")));
+          response.writeHead(200, { "Content-Type": "application/json" });
+          response.end(JSON.stringify({ ok: true }));
+        });
+        return;
+      }
+      // Состояние: принимаем и возвращаем как есть.
+      const chunks: Buffer[] = [];
+      request.on("data", (c: Buffer) => chunks.push(c));
+      request.on("end", () => {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ state: JSON.parse(Buffer.concat(chunks).toString() || "{}") }));
+      });
+    });
+    return new Promise((done) => {
+      s.listen(0, "127.0.0.1", () =>
+        done({
+          url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`,
+          names,
+          close: () => new Promise<void>((r) => s.close(() => r())),
+        }),
+      );
+    });
+  }
+
+  async function push(target: string | undefined, all: boolean, lib: string) {
+    const { cmdPush } = await import("../src/sync.js");
+    const было = process.env["FB2READ_LIBRARY"];
+    process.env["FB2READ_LIBRARY"] = lib;
+    const сервер = await raise();
+    try {
+      const code = await cmdPush({ url: сервер.url, token: "proba-token" }, target, all, store());
+      return { code, names: сервер.names };
+    } finally {
+      await сервер.close();
+      if (было === undefined) delete process.env["FB2READ_LIBRARY"];
+      else process.env["FB2READ_LIBRARY"] = было;
+    }
+  }
+
+  function library(): string {
+    const lib = mkdtempSync(join(tmpdir(), "fb2read-push-"));
+    writeFileSync(join(lib, "Первая.fb2"), книга("Первая"));
+    writeFileSync(join(lib, "Вторая.fb2"), книга("Вторая"));
+    // Не книга: в каталоге всегда найдётся что-нибудь постороннее.
+    writeFileSync(join(lib, "заметки.txt"), "не книга");
+    return lib;
+  }
+
+  it("каталогом уезжают все книги и только книги", async () => {
+    const lib = library();
+    const { code, names } = await push(lib, false, lib);
+    expect(code).toBe(0);
+    expect(names.sort()).toEqual(["Вторая.fb2", "Первая.fb2"]);
+    rmSync(lib, { recursive: true, force: true });
+  });
+
+  it("--all без пути берёт каталог библиотеки", async () => {
+    const lib = library();
+    const { code, names } = await push(undefined, true, lib);
+    expect(code).toBe(0);
+    expect(names).toHaveLength(2);
+    rmSync(lib, { recursive: true, force: true });
+  });
+
+  it("битая книга не останавливает остальные", async () => {
+    // Ради этого всё и затевалось: цикл в оболочке спотыкался на первой же.
+    const lib = library();
+    const битая = join(lib, "битая.fb2");
+    writeFileSync(битая, "");
+    rmSync(битая); // файл исчез между чтением каталога и открытием
+    const { code, names } = await push(lib, false, lib);
+    expect(code).toBe(0);
+    expect(names).toHaveLength(2);
+    rmSync(lib, { recursive: true, force: true });
+  });
+
+  it("без пути и без --all объясняет, чего ждали", async () => {
+    const { cmdPush } = await import("../src/sync.js");
+    expect(await cmdPush({ url: "http://127.0.0.1:1" }, undefined, false, store())).toBe(2);
   });
 });

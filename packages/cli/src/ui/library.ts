@@ -63,6 +63,14 @@ export interface LibraryOptions {
   ) => (block: number, bookmarks: Bookmark[]) => Promise<{ text: string; bookmarks?: Bookmark[] }>;
   /** Обмен состоянием всех книг по клавише в списке. */
   syncAll?: () => Promise<{ text: string; entries?: ChooserEntry[] }>;
+  /** Добавление книги или каталога по пути, введённому в списке. */
+  add?: (path: string) => Promise<{ text: string; entries?: ChooserEntry[] }>;
+  /**
+   * Выгрузка открытой книги на сервер целиком.
+   *
+   * Возвращает строку для читателя: пустую, если книга там уже была.
+   */
+  keep?: (path: string, meta: { hash: string; title: string; author: string }) => Promise<string>;
 }
 
 /**
@@ -80,12 +88,21 @@ export async function runLibrary(
   const session = new Session(terminal);
   session.begin(prefs.mouse);
 
+  // Итог выгрузки предыдущей книги: показывается, когда читатель вернулся в
+  // список. Ждать выгрузки нельзя — она идёт, пока книгу читают.
+  let uploadNote = "";
+
   try {
     for (;;) {
       const chooser = new Chooser(entries, new Theme(prefs.theme), prefs.mouse, {
         ...(options.syncAll ? { onSync: options.syncAll } : {}),
+        ...(options.add ? { onAdd: options.add } : {}),
         requestPaint: () => session.paint(),
       });
+      if (uploadNote) {
+        chooser.notice = ` ${uploadNote} `;
+        uploadNote = "";
+      }
       await session.show(chooser);
       let path = chooser.picked;
       if (path === null) return prefs;
@@ -125,6 +142,14 @@ export async function runLibrary(
       const key = await bookKey(full, source.size);
       const start = fromStart ? 0 : await store.loadPosition(key);
       const bookmarks = await store.loadBookmarks(key);
+
+      if (options.keep) {
+        void options
+          .keep(full, { hash: book.hash, title: book.title, author: book.author })
+          .then((note) => {
+            uploadNote = note;
+          });
+      }
 
       const result = await readBook(session, {
         book,

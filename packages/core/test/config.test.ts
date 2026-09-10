@@ -57,6 +57,22 @@ describe("конфиг", () => {
     expect(readConfig("[reader]\nwidth = 72\n").sync).toEqual({});
   });
 
+  it("читает upload отдельно от auto", () => {
+    // Это разные вещи: auto — про место в книге, upload — про саму книгу.
+    // Слить их значило бы гнать мегабайты у всех, кто включил синхронизацию.
+    const { sync } = readConfig("[sync]\nurl = http://localhost\nauto = yes\nupload = no\n");
+    expect([sync.auto, sync.upload]).toEqual([true, false]);
+    const оба = readConfig("[sync]\nurl = http://localhost\nupload = yes\n").sync;
+    expect([оба.auto, оба.upload]).toEqual([undefined, true]);
+  });
+
+  it("жалуется на непонятное upload, но остальное берёт", () => {
+    const { sync, notes } = readConfig("[sync]\nurl = http://localhost\nupload = иногда\n");
+    expect(sync.url).toBe("http://localhost");
+    expect(sync.upload).toBeUndefined();
+    expect(notes).toEqual(["в конфиге upload должно быть yes или no"]);
+  });
+
   it("жалуется на непонятное auto, но остальное берёт", () => {
     const { sync, notes } = readConfig("[sync]\nurl = http://localhost\nauto = когда-нибудь\n");
     expect(sync.url).toBe("http://localhost");

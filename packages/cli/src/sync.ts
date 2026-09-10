@@ -10,13 +10,14 @@
  * сообщается словами и один раз.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { basename, join, resolve } from "node:path";
 import {
   SyncClient,
   SyncError,
   bookKey,
+  isBookName,
   mergeState,
   nameWithExt,
   progressPercent,
@@ -44,6 +45,8 @@ export interface SyncSettings {
   url: string;
   token?: string;
   auto: boolean;
+  /** Выгружать ли саму книгу на сервер, когда её открыли. */
+  upload: boolean;
   device: string;
 }
 
@@ -60,6 +63,7 @@ export function syncSettings(prefs: SyncPrefs): SyncSettings | null {
   const settings: SyncSettings = {
     url,
     auto: prefs.auto ?? false,
+    upload: prefs.upload ?? false,
     device: process.env["FB2READ_DEVICE"] ?? hostname(),
   };
   if (token) settings.token = token;
@@ -130,25 +134,31 @@ export async function cmdRemote(prefs: SyncPrefs): Promise<number> {
 
 // --- fb2read push ----------------------------------------------------------
 
-/** Выгружает книгу и её состояние на сервер. */
-export async function cmdPush(prefs: SyncPrefs, file: string | undefined, store: JsonFileStore): Promise<number> {
-  const settings = prepare(prefs);
-  if (!settings) return 2;
-  if (!file) {
-    err("укажите книгу: fb2read push книга.fb2");
-    return 2;
-  }
+/** Книги в каталоге: те же, что показал бы список, и в том же порядке. */
+function booksIn(dir: string): string[] {
+  // Вглубь не идём намеренно: `fb2read КАТАЛОГ` показывает ровно то, что лежит
+  // в самом каталоге, и выгрузка не должна расходиться со списком.
+  return readdirSync(dir)
+    .sort()
+    .map((name) => join(dir, name))
+    .filter((full) => {
+      if (!isBookName(full)) return false;
+      try {
+        return statSync(full).isFile();
+      } catch {
+        return false; // исчез между чтением каталога и проверкой
+      }
+    });
+}
 
-  let data: Uint8Array;
-  const path = resolve(file);
-  try {
-    data = new Uint8Array(readFileSync(path));
-  } catch (e) {
-    err(`${file}: ${(e as Error).message}`);
-    return 1;
-  }
-
-  const hash = await sha256Hex(data);
+/** Выгружает одну книгу вместе с её позицией. */
+async function pushOne(
+  client: SyncClient,
+  store: JsonFileStore,
+  path: string,
+  data: Uint8Array,
+  hash: string,
+): Promise<void> {
   let meta = { title: "", author: "" };
   try {
     meta = await quickMeta(new FileSource(path));
@@ -156,24 +166,121 @@ export async function cmdPush(prefs: SyncPrefs, file: string | undefined, store:
     // Нечитаемая книга всё равно выгружается: разбирать её будет то
     // устройство, которое скачает.
   }
+  await client.upload(hash, basename(path), data, meta);
 
-  const client = clientFor(settings, 120_000);
+  // Заодно уезжает позиция: книга без места, на котором её бросили,
+  // на другом устройстве откроется с начала.
+  const key = await bookKey(path, data.length);
+  const local = await localState(store, key, hash);
+  if (local) {
+    const { warning } = await client.pushState(local);
+    if (warning) err(warning);
+  }
+}
+
+/**
+ * Выгружает на сервер книгу, каталог книг или всю библиотеку.
+ *
+ * Каталог целиком — потому что выгружать по одной невыносимо: за этим люди
+ * писали циклы в оболочке, а под Windows и цикл не всякий напишет. Уже
+ * лежащее на сервере пропускается по отпечатку, и осечка на одной книге не
+ * останавливает остальные: у кого-то в каталоге всегда найдётся битый файл.
+ */
+export async function cmdPush(
+  prefs: SyncPrefs,
+  target: string | undefined,
+  all: boolean,
+  store: JsonFileStore,
+): Promise<number> {
+  const settings = prepare(prefs);
+  if (!settings) return 2;
+  if (!target && !all) {
+    err("укажите книгу, каталог или --all: fb2read push книга.fb2");
+    return 2;
+  }
+
+  // --all без пути — это каталог библиотеки: туда же ложится скачанное.
+  const where = target ? resolve(target) : libraryDir();
+  let files: string[];
   try {
-    out(`выгружаю ${basename(path)} (${Math.round(data.length / 1024)} КБ)`);
-    await client.upload(hash, basename(path), data, meta);
+    files = statSync(where).isDirectory() ? booksIn(where) : [where];
+  } catch (e) {
+    err(`${target ?? where}: ${(e as Error).message}`);
+    return 1;
+  }
+  if (!files.length) {
+    err(`в ${where} книг не нашлось`);
+    return 1;
+  }
 
-    // Заодно уезжает позиция: книга без места, на котором её бросили,
-    // на другом устройстве откроется с начала.
-    const key = await bookKey(path, data.length);
-    const local = await localState(store, key, hash);
-    if (local) {
-      const { warning } = await client.pushState(local);
-      if (warning) err(warning);
-    }
-    out("готово");
-    return 0;
+  const client = clientFor(settings, 300_000);
+  let there: Set<string>;
+  try {
+    there = new Set((await client.list()).map((book) => book.hash));
   } catch (e) {
     return complain(e);
+  }
+
+  let sent = 0;
+  let already = 0;
+  let failed = 0;
+  for (const path of files) {
+    try {
+      const data = new Uint8Array(readFileSync(path));
+      const hash = await sha256Hex(data);
+      if (there.has(hash)) {
+        already += 1;
+        continue;
+      }
+      out(`выгружаю ${basename(path)} (${Math.round(data.length / 1024)} КБ)`);
+      await pushOne(client, store, path, data, hash);
+      there.add(hash);
+      sent += 1;
+    } catch (e) {
+      err(`${basename(path)}: ${e instanceof SyncError ? e.message : (e as Error).message}`);
+      failed += 1;
+    }
+  }
+
+  // Итог словами: «готово» после десятка строк не говорит, что вышло.
+  const parts = [`выгружено: ${sent}`];
+  if (already) parts.push(`уже было: ${already}`);
+  if (failed) parts.push(`не вышло: ${failed}`);
+  out(parts.join(", "));
+  return failed ? 1 : 0;
+}
+
+/**
+ * Выгружает открытую книгу на сервер, если её там ещё нет.
+ *
+ * Затевается ради того, чтобы книгу не приходилось отправлять руками: открыл
+ * на ноутбуке — вечером она уже на телефоне. Поэтому запускается при открытии
+ * и работает, пока человек читает: книга весит мегабайты, и ждать её отправки
+ * ни на входе, ни на выходе читателю незачем.
+ *
+ * Ошибку наружу не пускает: читатель открыл книгу, а не сервер. Но и молчать о
+ * ней нельзя — она возвращается строкой, и тот, кто вызвал, её показывает.
+ */
+export async function keepOnServer(
+  settings: SyncSettings,
+  path: string,
+  meta: { hash: string; title: string; author: string },
+): Promise<string> {
+  try {
+    const client = clientFor(settings, 300_000);
+    // Сперва спрашиваем, есть ли книга: заново лить сорок мегабайт при каждом
+    // открытии — не то, чего ждут от чтения книги.
+    const there = await client.list();
+    if (there.some((book) => book.hash === meta.hash)) return "";
+    const data = new Uint8Array(readFileSync(path));
+    await client.upload(meta.hash, basename(path), data, {
+      title: meta.title,
+      author: meta.author,
+    });
+    return `книга выгружена на сервер: ${meta.title || basename(path)}`;
+  } catch (e) {
+    const why = e instanceof SyncError ? e.message : (e as Error).message;
+    return `книгу не удалось выгрузить: ${why}`;
   }
 }
 
