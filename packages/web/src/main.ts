@@ -25,6 +25,7 @@ import { firstFrom, step } from "./find.js";
 import { marked, removeMark, sortedMarks, toggleMark } from "./marks.js";
 import { keepPosition, topmost, type Keeper } from "./position.js";
 import { renderBook, renderOne } from "./render.js";
+import { exchange, guessDevice, syncSettings, type SyncSettings } from "./sync.js";
 import { bookSize, shelfOrder, whenRead } from "./shelf.js";
 import type { Ask, ParsedBook, Reply } from "./worker.js";
 
@@ -50,6 +51,14 @@ const greeting = document.querySelector<HTMLElement>("#greeting")!;
 const storageLine = document.querySelector<HTMLElement>("#storage")!;
 const installLine = document.querySelector<HTMLElement>("#install")!;
 const updateLine = document.querySelector<HTMLElement>("#update")!;
+const syncNow = document.querySelector<HTMLButtonElement>("#sync-now")!;
+const syncSetup = document.querySelector<HTMLButtonElement>("#sync-setup")!;
+const syncForm = document.querySelector<HTMLFormElement>("#sync-form")!;
+const syncNote = document.querySelector<HTMLElement>("#sync-note")!;
+const syncUrl = document.querySelector<HTMLInputElement>("#sync-url")!;
+const syncToken = document.querySelector<HTMLInputElement>("#sync-token")!;
+const syncDevice = document.querySelector<HTMLInputElement>("#sync-device")!;
+const syncAuto = document.querySelector<HTMLInputElement>("#sync-auto")!;
 
 const store = new IdbStore();
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
@@ -694,6 +703,40 @@ async function keepBook(data: Blob, name: string, book: ParsedBook): Promise<voi
   }
 }
 
+// --- обмен с сервером ------------------------------------------------------
+
+/** Настройки обмена, как они сейчас записаны; null — сервер не настроен. */
+let server: SyncSettings | null = null;
+
+async function loadSync(): Promise<void> {
+  const settings = await store.loadSettings();
+  server = syncSettings(settings);
+  syncNow.hidden = server === null;
+  syncSetup.textContent = server ? "Настроить…" : "Синхронизация…";
+  syncUrl.value = server?.url ?? "";
+  syncToken.value = server?.token ?? "";
+  syncDevice.value = server?.device ?? guessDevice(navigator.userAgent);
+  syncAuto.checked = server?.auto ?? true;
+}
+
+/**
+ * Обмен по нажатию кнопки.
+ *
+ * Читатель нажал и ждёт, поэтому итог всегда словами — и когда получилось, и
+ * когда нет. Полка перерисовывается: с сервера могли приехать книги.
+ */
+async function runSync(quiet = false): Promise<void> {
+  if (!server) return;
+  if (!quiet) {
+    syncNote.textContent = "обмениваюсь…";
+    syncNow.disabled = true;
+  }
+  const report = await exchange(store, server);
+  syncNow.disabled = false;
+  syncNote.textContent = report.text;
+  await fillShelf();
+}
+
 // --- показ книги -----------------------------------------------------------
 
 function showFailure(text: string): void {
@@ -785,6 +828,31 @@ document.querySelector("#toc-toggle")!.addEventListener("click", () => togglePan
 document.querySelector("#find-toggle")!.addEventListener("click", () => togglePanel("find"));
 document.querySelector("#marks-toggle")!.addEventListener("click", () => togglePanel("marks"));
 document.querySelector("#marks-export")!.addEventListener("click", exportMarks);
+
+syncNow.addEventListener("click", () => void runSync());
+
+syncSetup.addEventListener("click", () => {
+  syncForm.hidden = !syncForm.hidden;
+  if (!syncForm.hidden) syncUrl.focus();
+});
+
+syncForm.addEventListener("submit", (event) => {
+  event.preventDefault();
+  void store
+    .saveSettings({
+      syncUrl: syncUrl.value.trim(),
+      // Токен лежит рядом с настройками, в хранилище этого браузера. Больше
+      // ему деться некуда: сервер спрашивает его при каждом обмене.
+      syncToken: syncToken.value.trim(),
+      device: syncDevice.value.trim() || guessDevice(navigator.userAgent),
+      syncAuto: syncAuto.checked,
+    })
+    .then(loadSync)
+    .then(() => {
+      syncForm.hidden = true;
+      syncNote.textContent = server ? "сервер записан" : "адрес пуст — обмена не будет";
+    });
+});
 document.querySelector("#find-next")!.addEventListener("click", () => stepMatch(1));
 document.querySelector("#find-prev")!.addEventListener("click", () => stepMatch(-1));
 markButton.addEventListener("click", () => void toggleHere());
@@ -821,7 +889,11 @@ document.querySelector("#close")!.addEventListener("click", () => {
   document.title = "fb2read";
   // Полка перерисовывается после записи: процент только что изменился, и
   // список должен показывать то же, что показывала книга.
-  void closeOpen().then(() => fillShelf());
+  // Место только что записано — самое время отдать его серверу, если читатель
+  // этого просил. Молча: он закрыл книгу, а не нажимал кнопку.
+  void closeOpen()
+    .then(() => fillShelf())
+    .then(() => (server?.auto ? runSync(true) : undefined));
 });
 
 /**
@@ -909,6 +981,7 @@ void store.loadSettings().then((settings) => {
 
 // Полка рисуется сразу: ради неё читалку и открывают во второй раз.
 void fillShelf();
+void loadSync();
 paintStatusBar();
 showInstall();
 

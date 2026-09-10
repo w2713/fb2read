@@ -206,6 +206,68 @@ body.dragging {
   color: var(--accent);
 }
 
+/* --- обмен с сервером ------------------------------------------------------ */
+
+#sync {
+  margin-top: 1.5rem;
+  font: 0.9rem/1.5 system-ui, sans-serif;
+}
+
+/* Ответ обмена — своей строкой: рядом с кнопками он переносится по словам и
+   читается как их продолжение. */
+#sync-note {
+  display: block;
+  margin-top: 0.4rem;
+  color: var(--dim);
+}
+
+#sync-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  max-width: 26rem;
+  margin-top: 0.8rem;
+  padding: 0.9rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.5rem;
+}
+
+#sync-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  color: var(--dim);
+}
+
+/* Согласие ставится галочкой, и подпись должна стоять рядом, а не над ней. */
+#sync-form label.row {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+#sync-form input[type="url"],
+#sync-form input[type="password"],
+#sync-form input[type="text"] {
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+#sync-form button[type="submit"] {
+  align-self: flex-start;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
 /* --- книга ---------------------------------------------------------------- */
 
 #book h1,

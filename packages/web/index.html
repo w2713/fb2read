@@ -78,6 +78,25 @@
              не станет, а на телефоне это и вовсе конец всей затее. -->
         <ul id="shelf"></ul>
         <p id="storage" class="hint"></p>
+
+        <!-- Обмен с сервером: без адреса читалка о нём и не заговаривает. -->
+        <section id="sync">
+          <p class="hint">
+            <button type="button" id="sync-now" hidden>Синхронизировать</button>
+            <button type="button" id="sync-setup">Синхронизация…</button>
+            <span id="sync-note"></span>
+          </p>
+          <form id="sync-form" hidden>
+            <label>Адрес сервера<input id="sync-url" type="url" placeholder="https://books.example.org" autocomplete="off" /></label>
+            <label>Токен<input id="sync-token" type="password" autocomplete="off" /></label>
+            <label>Имя устройства<input id="sync-device" type="text" autocomplete="off" /></label>
+            <label class="row">
+              <input id="sync-auto" type="checkbox" checked />
+              Обмениваться при закрытии книги
+            </label>
+            <button type="submit">Сохранить</button>
+          </form>
+        </section>
         <p id="install" class="hint" hidden></p>
         <p id="update" class="hint" hidden></p>
       </section>
