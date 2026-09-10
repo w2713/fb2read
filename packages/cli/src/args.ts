@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { IMAGE_BACKENDS, THEME_ORDER, type ImageBackend, type Theme } from "@fb2read/core";
 
 export const APP = "fb2read";
-export const VERSION = "0.16.1";
+export const VERSION = "0.17.0";
 
 /** Команды синхронизации: первое слово, а не ключ. */
 export const COMMANDS = ["sync", "push", "pull", "remote"] as const;
@@ -54,7 +54,8 @@ export const HELP = `${APP} ${VERSION}
 
 Команды синхронизации (нужен раздел [sync] в конфиге):
   sync                  обменяться позициями и закладками, книги не трогая
-  push ФАЙЛ             выгрузить книгу и её позицию на сервер
+  push ЧТО | --all      выгрузить на сервер книгу, каталог книг либо
+                        всю библиотеку
   pull ЧТО | --all      скачать книгу с сервера в каталог библиотеки
   remote                показать книги на сервере с прогрессом
 
@@ -67,7 +68,8 @@ export const HELP = `${APP} ${VERSION}
       --images СПОСОБ   ${IMAGE_BACKENDS.join(", ")}
       --no-mouse        не захватывать мышь
       --from-start      не восстанавливать сохранённую позицию
-      --all             для pull: скачать все книги с сервера
+      --all             для pull — скачать все книги с сервера;
+                        для push — выгрузить всю библиотеку
       --config ФАЙЛ     файл настроек
       --write-config    записать образец файла настроек и выйти
       --dump            вывести текст в stdout (например, | less -R)

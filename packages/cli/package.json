@@ -1,6 +1,6 @@
 {
   "name": "fb2read",
-  "version": "0.16.1",
+  "version": "0.17.0",
   "type": "module",
   "description": "Читалка книг FB2 и EPUB для терминала",
   "license": "MIT",

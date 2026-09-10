@@ -126,7 +126,7 @@ PY
 
 echo "ноутбук: выгружаю книгу"
 noutbuk push "$WORK/Анна Каренина.fb2" > "$WORK/push.log" 2>&1 || { cat "$WORK/push.log"; fail "push не удался"; }
-grep -q "готово" "$WORK/push.log" || { cat "$WORK/push.log"; fail "push не сказал «готово»"; }
+grep -q "выгружено: 1" "$WORK/push.log" || { cat "$WORK/push.log"; fail "push не отчитался о выгруженной книге"; }
 
 echo "ноутбук: смотрю, что на сервере"
 noutbuk remote > "$WORK/remote.log" 2>&1 || { cat "$WORK/remote.log"; fail "remote не удался"; }

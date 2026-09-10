@@ -225,6 +225,7 @@ export async function libraryHarness(
     rows?: number;
     columns?: number;
     onSync?: () => Promise<{ text: string; entries?: ChooserEntry[] }>;
+    onAdd?: (path: string) => Promise<{ text: string; entries?: ChooserEntry[] }>;
   } = {},
 ): Promise<ChooserHarness> {
   const terminal = new FakeTerminal(options.rows ?? 24, options.columns ?? 80);
@@ -232,6 +233,7 @@ export async function libraryHarness(
   session.begin(options.mouse ?? true);
   const chooser = new Chooser(entries, new Theme(options.theme ?? "night"), options.mouse ?? true, {
     ...(options.onSync ? { onSync: options.onSync } : {}),
+    ...(options.onAdd ? { onAdd: options.onAdd } : {}),
     requestPaint: () => session.paint(),
   });
   const shown = session.show(chooser).then(() => {

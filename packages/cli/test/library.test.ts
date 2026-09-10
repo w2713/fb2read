@@ -261,3 +261,51 @@ describe("синхронизация из списка", () => {
     expect(ui.chooser.picked).toBeNull();
   });
 });
+
+describe("добавление книги из списка", () => {
+  it("клавиша a спрашивает путь, и введённое уходит наружу", async () => {
+    // Ради этого всё и делалось: книгу, лежащую в «Загрузках», не должно
+    // требоваться копировать руками, выйдя из читалки.
+    let asked: string | null = null;
+    const ui = await libraryHarness(BOOKS, {
+      onAdd: async (path) => {
+        asked = path;
+        return { text: "добавлено: 1" };
+      },
+    });
+    await ui.press("a");
+    expect(ui.terminal.line(23)).toContain("добавить книгу или каталог");
+
+    for (const ch of "/тут/к.fb2") await ui.press(ch);
+    expect(ui.terminal.line(23)).toContain("/тут/к.fb2");
+    await ui.press("\r");
+    await ui.settle();
+    expect(asked).toBe("/тут/к.fb2");
+    expect(ui.terminal.line(23)).toContain("добавлено: 1");
+    await ui.press("q");
+    await ui.picked();
+  });
+
+  it("буквы пути не считаются командами списка", async () => {
+    // «q» в имени файла не должна закрывать список, а «a» — открывать ввод
+    // заново: пока внизу ждут путь, клавиши принадлежат ему.
+    const ui = await libraryHarness(BOOKS, { onAdd: async () => ({ text: "готово" }) });
+    await ui.press("a");
+    for (const ch of "qaS") await ui.press(ch);
+    expect(ui.terminal.line(23)).toContain("qaS");
+    await ui.press("\x1b"); // esc — передумали
+    await ui.settle();
+    expect(ui.terminal.line(23)).toContain("Enter — читать");
+    await ui.press("q");
+    expect(await ui.picked()).toBeNull();
+  });
+
+  it("без обработчика клавиша ничего не делает и подсказки о ней нет", async () => {
+    const ui = await libraryHarness(BOOKS);
+    expect(ui.terminal.line(23)).not.toContain("добавить");
+    await ui.press("a");
+    expect(ui.terminal.line(23)).not.toContain("добавить книгу или каталог");
+    await ui.press("q");
+    expect(await ui.picked()).toBeNull();
+  });
+});

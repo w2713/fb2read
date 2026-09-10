@@ -245,4 +245,54 @@ describe.skipIf(!runnable)("библиотека в настоящем терм�
     term.write("q"); // выйти совсем
     expect(await exited).toBe(0);
   });
+
+  it("добавляет книгу в библиотеку прямо из списка", async () => {
+    // Сквозная проверка того, ради чего всё затевалось: книга лежит в
+    // «Загрузках», а оказаться должна в списке — не выходя из читалки и не
+    // копируя ничего руками.
+    const shelf = join(dir, "полка2");
+    const downloads = join(dir, "загрузки");
+    mkdirSync(shelf, { recursive: true });
+    mkdirSync(downloads, { recursive: true });
+    writeFileSync(join(shelf, "старая.fb2"), encodeLegacy(SAMPLE, "cp1251"));
+    const новая = join(downloads, "новая.fb2");
+    writeFileSync(новая, encodeLegacy(SAMPLE.replace("Проверка читалки", "Свежая книга"), "cp1251"));
+
+    const library = join(dir, "библиотека");
+    const term = pty!.spawn(process.execPath, [CLI, shelf], {
+      name: "xterm-256color",
+      cols: 100,
+      rows: 20,
+      cwd: dir,
+      env: {
+        ...process.env,
+        XDG_DATA_HOME: join(dir, "adddata"),
+        XDG_CONFIG_HOME: join(dir, "addconfig"),
+        FB2READ_LIBRARY: library,
+      },
+    });
+    let output = "";
+    term.onData((d) => {
+      output += d;
+    });
+    const exited = new Promise<number>((done) => term.onExit(({ exitCode }) => done(exitCode)));
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+    await wait(600);
+    expect(output).toContain("a — добавить книгу");
+
+    term.write("a");
+    await wait(300);
+    expect(output).toContain("добавить книгу или каталог");
+
+    term.write(новая);
+    term.write("\r");
+    await wait(800);
+    expect(output).toContain("добавлено: 1");
+    // Файл действительно лёг в библиотеку, а не только показался на экране.
+    expect(existsSync(join(library, "новая.fb2"))).toBe(true);
+
+    term.write("q");
+    expect(await exited).toBe(0);
+  });
 });

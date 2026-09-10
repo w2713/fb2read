@@ -66,6 +66,14 @@ export interface SyncPrefs {
   token?: string;
   /** Сливать ли состояние при открытии и выходе из книги. */
   auto?: boolean;
+  /**
+   * Выгружать ли саму книгу на сервер, когда её открыли.
+   *
+   * По умолчанию нет, и это не осторожность ради осторожности: книги весят
+   * мегабайты, а каталог с ними бывает на сотню томов. Включать это должен
+   * тот, кто знает, сколько места у него на сервере.
+   */
+  upload?: boolean;
 }
 
 /** Что вышло из конфига: настройки, клавиши и замечания к ним. */
@@ -118,11 +126,12 @@ export function readConfig(text: string): ConfigResult {
   const syncSection = ini["sync"] ?? {};
   if (syncSection["url"]) sync.url = syncSection["url"]!.trim();
   if (syncSection["token"]) sync.token = syncSection["token"]!.trim();
-  if ("auto" in syncSection) {
-    const value = syncSection["auto"]!.trim().toLowerCase();
-    if (TRUE.has(value)) sync.auto = true;
-    else if (FALSE.has(value)) sync.auto = false;
-    else notes.push("в конфиге auto должно быть yes или no");
+  for (const name of ["auto", "upload"] as const) {
+    if (!(name in syncSection)) continue;
+    const value = syncSection[name]!.trim().toLowerCase();
+    if (TRUE.has(value)) sync[name] = true;
+    else if (FALSE.has(value)) sync[name] = false;
+    else notes.push(`в конфиге ${name} должно быть yes или no`);
   }
 
   return { prefs, sync, keys: ini["keys"] ?? {}, notes };
@@ -148,6 +157,8 @@ export function configSample(): string {
 # url = https://books.example.org
 # token = ...            либо переменная окружения FB2READ_SYNC_TOKEN
 # auto = yes             сливать позицию при открытии и выходе из книги
+# upload = yes           выгружать саму книгу, когда её открыли: тогда она
+#                        появится на других устройствах без push
 
 [keys]
 # Клавиши через запятую. Понимаются одиночные символы, имена
