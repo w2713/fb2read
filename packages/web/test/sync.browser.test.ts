@@ -143,6 +143,30 @@ async function setUp(page: Page): Promise<void> {
   await page.waitForSelector("#sync-now:not([hidden])", { timeout: 10_000 });
 }
 
+/**
+ * Нажимает «Синхронизировать» и дожидается именно этого обмена.
+ *
+ * Просто «в строке нет слова „не вышло“» — негодная проверка: она проходит
+ * мгновенно, на ответе от прошлого обмена, и дальше идёт разговор с сервером,
+ * которого ещё не было. Поэтому строка сперва очищается, а потом ждётся любой
+ * законченный ответ.
+ */
+async function обменяться(page: Page): Promise<string> {
+  await page.evaluate(() => {
+    document.querySelector("#sync-note")!.textContent = "";
+  });
+  await page.click("#sync-now");
+  await page.waitForFunction(
+    () => {
+      const now = document.querySelector("#sync-note")!.textContent ?? "";
+      return now !== "" && now !== "обмениваюсь…";
+    },
+    undefined,
+    { timeout: 30_000 },
+  );
+  return (await page.textContent("#sync-note")) ?? "";
+}
+
 /** Отдаёт книгу странице так, как это сделал бы проводник. */
 async function give(page: Page, name: string, text: string): Promise<void> {
   await page.evaluate(
@@ -177,10 +201,7 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     await первое.waitForSelector("#shelf li", { timeout: 10_000 });
     // Обмен мог случиться уже при закрытии книги — он на то и заведён; важно
     // не то, кто отправил книгу, а то, что она на сервере.
-    await первое.click("#sync-now");
-    await expect
-      .poll(() => первое.textContent("#sync-note"), { timeout: 30_000 })
-      .not.toContain("не вышло");
+    expect(await обменяться(первое)).not.toContain("не вышло");
 
     // Второе устройство — другой браузерный профиль, ничего своего у него нет.
     const второе = await browser.newPage();
@@ -188,10 +209,7 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     await setUp(второе);
     expect(await второе.$$eval("#shelf li", (n) => n.length)).toBe(0);
 
-    await второе.click("#sync-now");
-    await expect
-      .poll(() => второе.textContent("#sync-note"), { timeout: 30_000 })
-      .toContain("получено книг: 1");
+    expect(await обменяться(второе)).toContain("получено книг: 1");
 
     // Книга приехала целиком и открывается.
     await второе.waitForSelector("#shelf li", { timeout: 10_000 });
@@ -223,15 +241,13 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     await первое.click("#mark");
     await первое.click("#close");
     await первое.waitForSelector("#shelf li", { timeout: 10_000 });
-    await первое.click("#sync-now");
-    await expect.poll(() => первое.textContent("#sync-note"), { timeout: 30_000 }).not.toContain("не вышло");
+    expect(await обменяться(первое)).not.toContain("не вышло");
 
     // Второе устройство забирает книгу вместе с закладкой.
     const второе = await browser.newPage();
     await второе.goto(base);
     await setUp(второе);
-    await второе.click("#sync-now");
-    await expect.poll(() => второе.textContent("#sync-note"), { timeout: 30_000 }).toContain("получено книг");
+    expect(await обменяться(второе)).toContain("получено книг");
     await второе.waitForSelector("#shelf li", { timeout: 10_000 });
     // Выбирается именно эта книга: на полке уже лежит и та, что приехала
     // раньше, и «последняя строка» оказалась бы не той.
@@ -244,12 +260,10 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     await второе.click("#mark-list .mark-drop");
     await второе.click("#close");
     await второе.waitForSelector("#shelf li", { timeout: 10_000 });
-    await второе.click("#sync-now");
-    await expect.poll(() => второе.textContent("#sync-note"), { timeout: 30_000 }).not.toContain("не вышло");
+    expect(await обменяться(второе)).not.toContain("не вышло");
 
     // Первое устройство обменивается снова — закладка должна уйти и у него.
-    await первое.click("#sync-now");
-    await expect.poll(() => первое.textContent("#sync-note"), { timeout: 30_000 }).not.toContain("не вышло");
+    expect(await обменяться(первое)).not.toContain("не вышло");
     await первое.click("#shelf .shelf-open:has-text('Книга закладок')");
     await первое.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
     await первое.click("#marks-toggle");
@@ -268,10 +282,9 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     await page.click("#sync-form button[type=submit]");
     await page.waitForSelector("#sync-now:not([hidden])", { timeout: 10_000 });
 
-    await page.click("#sync-now");
     // Сказано должно быть именно про токен: «не вышло» бывает и когда сети
     // нет вовсе, и такой ответ читателю ничего не объясняет.
-    await expect.poll(() => page.textContent("#sync-note"), { timeout: 30_000 }).toContain("токен");
+    expect(await обменяться(page)).toContain("токен");
     await page.close();
   }, SLOW);
 });
