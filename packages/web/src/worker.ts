@@ -32,7 +32,9 @@ export interface ParsedBook {
 }
 
 export type Request =
-  | { id: number; kind: "parse"; file: File }
+  // Книга едет сюда как Blob, а не как File: с полки она приходит именно так,
+  // и пересобирать её в File значило бы скопировать все сорок мегабайт.
+  | { id: number; kind: "parse"; data: Blob; name: string }
   | { id: number; kind: "image"; src: string };
 
 /**
@@ -54,7 +56,7 @@ let current: Book | null = null;
 
 async function handle(request: Request): Promise<Reply> {
   if (request.kind === "parse") {
-    const book = await Book.open(new BrowserFileSource(request.file));
+    const book = await Book.open(new BrowserFileSource(request.data, request.name));
     current = book;
     return {
       id: request.id,

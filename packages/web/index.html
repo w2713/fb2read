@@ -5,6 +5,19 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="color-scheme" content="light dark" />
     <title>fb2read</title>
+
+    <!-- Пути пишутся от корня с одной косой: базовый путь Vite подставит сам,
+         а написанный руками он подставит вторым разом. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+    <meta name="theme-color" content="#ffffff" />
+    <!-- Без display: standalone и этой строки iOS открывает читалку с
+         адресной строкой, то есть обычной вкладкой, а не приложением. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="fb2read" />
+
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -54,12 +67,19 @@
     <main id="app">
       <section id="start">
         <h1>fb2read</h1>
-        <p>Читалка книг FB2 и EPUB. Откройте книгу с устройства.</p>
+        <p id="greeting">Читалка книг FB2 и EPUB. Откройте книгу с устройства.</p>
         <label class="pick">
           <input type="file" id="file" accept=".fb2,.fb2.zip,.fbz,.epub,.zip" />
           <span>Выбрать книгу</span>
         </label>
         <p class="hint">Или перетащите файл сюда.</p>
+
+        <!-- Книга остаётся в браузере: искать её в «Файлах» второй раз никто
+             не станет, а на телефоне это и вовсе конец всей затее. -->
+        <ul id="shelf"></ul>
+        <p id="storage" class="hint"></p>
+        <p id="install" class="hint" hidden></p>
+        <p id="update" class="hint" hidden></p>
       </section>
       <article id="book" hidden></article>
     </main>

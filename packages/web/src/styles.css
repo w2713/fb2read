@@ -57,6 +57,18 @@
   box-sizing: border-box;
 }
 
+/*
+ * Спрятанное — спрятано.
+ *
+ * Встроенное правило браузера для hidden — это `display: none` без всякой
+ * силы, и любой наш `display` его перебивает. Панель чтения именно так и
+ * оставалась на экране библиотеки: атрибут стоял, а `display: flex` был
+ * сильнее.
+ */
+[hidden] {
+  display: none !important;
+}
+
 body {
   margin: 0;
   background: var(--bg);
@@ -110,11 +122,88 @@ body {
 
 .hint {
   font: 0.9rem/1.5 system-ui, sans-serif;
+  color: var(--dim);
+}
+
+.hint button {
+  padding: 0.35rem 0.6rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
 }
 
 body.dragging {
   outline: 3px dashed var(--accent);
   outline-offset: -8px;
+}
+
+/* --- полка ---------------------------------------------------------------- */
+
+#shelf {
+  margin: 1.5rem 0 0;
+  padding: 0;
+  list-style: none;
+  font-family: system-ui, sans-serif;
+}
+
+#shelf li {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  border-top: 1px solid var(--rule);
+}
+
+#shelf li:last-child {
+  border-bottom: 1px solid var(--rule);
+}
+
+.shelf-open {
+  flex: 1;
+  min-width: 0;
+  display: block;
+  padding: 0.8rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.shelf-title {
+  display: block;
+  font-size: 1.05rem;
+  /* Названия книг длинные, а экран телефона — нет. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shelf-about {
+  display: block;
+  margin-top: 0.15rem;
+  color: var(--dim);
+  font-size: 0.85rem;
+}
+
+.shelf-open:hover .shelf-title {
+  color: var(--accent);
+}
+
+.shelf-drop {
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font: 1rem/1 system-ui, sans-serif;
+  cursor: pointer;
+}
+
+.shelf-drop:hover {
+  color: var(--accent);
 }
 
 /* --- книга ---------------------------------------------------------------- */

@@ -53,6 +53,11 @@ const TYPES: Record<string, string> = {
   ".html": "text/html; charset=utf-8",
   ".js": "text/javascript; charset=utf-8",
   ".css": "text/css; charset=utf-8",
+  ".png": "image/png",
+  ".svg": "image/svg+xml",
+  // Без этого типа Chromium отказывается считать манифест манифестом, и
+  // установка на домашний экран не предлагается вовсе.
+  ".webmanifest": "application/manifest+json",
 };
 
 let browser: Browser;
@@ -660,6 +665,93 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     expect(await page.$("#find:not([hidden])")).not.toBeNull();
     expect(await page.$("#toc:not([hidden])")).toBeNull();
     expect(await page.$("#book .marked")).toBeNull();
+    await page.close();
+  }, SLOW);
+  it("панель чтения не висит над библиотекой", async () => {
+    // Атрибут hidden сам по себе ничего не прячет, если у элемента задан свой
+    // display: браузерное правило слабее любого нашего. Проверяется поэтому не
+    // атрибут, а то, видно ли панель на самом деле.
+    const page = await browser.newPage();
+    await page.goto(base);
+    const height = () =>
+      page.evaluate(() => document.querySelector("#bar")!.getBoundingClientRect().height);
+    expect(await height()).toBe(0);
+
+    await give(page, "Долгая книга.fb2", longBook());
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    expect(await height()).toBeGreaterThan(0);
+
+    await page.click("#close");
+    await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
+    expect(await height()).toBe(0);
+    await page.close();
+  }, SLOW);
+
+  it("книга остаётся на полке после перезагрузки", async () => {
+    // Ради этого весь этап: на телефоне книга лежит в «Файлах», и пробираться
+    // к ней заново при каждом чтении никто не станет.
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await readAt(page, 30);
+
+    await page.reload();
+    await page.waitForSelector("#shelf li", { timeout: 20_000 });
+    expect(await page.textContent("#shelf .shelf-open")).toContain("Долгая книга");
+
+    // Открывается касанием: файл больше не выбирают.
+    await page.click("#shelf .shelf-open");
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    expect(await page.textContent("#book")).toContain("Абзац номер 30.");
+
+    // И открывается там, где бросили.
+    const saved = (await savedBlocks(page))[0]!;
+    expect(Math.abs(await blockTop(page, saved))).toBeLessThan(40);
+    await page.close();
+  }, SLOW);
+
+  it("одна и та же книга не удваивается", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await page.click("#close");
+    // Тот же файл под другим именем — та же книга: отпечаток один.
+    await give(page, "Копия.fb2", longBook());
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await page.click("#close");
+
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+    expect(await page.$$eval("#shelf li", (n) => n.length)).toBe(1);
+    await page.close();
+  }, SLOW);
+
+  it("убранная книга исчезает, а место остаётся", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await readAt(page, 25);
+    const was = (await savedBlocks(page))[0]!;
+    await page.click("#close");
+
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+    await page.click("#shelf .shelf-drop");
+    await expect.poll(() => page.$$eval("#shelf li", (n) => n.length), { timeout: 5000 }).toBe(0);
+
+    await page.reload();
+    await page.waitForSelector("#start:not([hidden])", { timeout: 20_000 });
+    expect(await page.$$eval("#shelf li", (n) => n.length)).toBe(0);
+
+    // Место пережило удаление: вернув ту же книгу, читатель попадёт туда же.
+    await give(page, "Долгая книга.fb2", longBook());
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    expect(Math.abs(await blockTop(page, was))).toBeLessThan(40);
+    await page.close();
+  }, SLOW);
+
+  it("на полке видно, сколько прочитано", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await readAt(page, 60);
+    await page.click("#close");
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+    expect(await page.textContent("#shelf .shelf-about")).toMatch(/[1-9]\d?%/);
     await page.close();
   }, SLOW);
 });

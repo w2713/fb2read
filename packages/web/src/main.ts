@@ -15,15 +15,17 @@ import {
   findMatches,
   matchContext,
   normalize,
+  plural,
   progressPercent,
   type Bookmark,
   type Match,
 } from "@fb2read/core";
-import { IdbStore } from "./db.js";
+import { IdbStore, type BookMeta } from "./db.js";
 import { firstFrom, step } from "./find.js";
 import { marked, removeMark, sortedMarks, toggleMark } from "./marks.js";
 import { keepPosition, topmost, type Keeper } from "./position.js";
 import { renderBook, renderOne } from "./render.js";
+import { bookSize, shelfOrder, whenRead } from "./shelf.js";
 import type { Ask, ParsedBook, Reply } from "./worker.js";
 
 const start = document.querySelector<HTMLElement>("#start")!;
@@ -43,6 +45,11 @@ const marksEmpty = document.querySelector<HTMLElement>("#marks-empty")!;
 const markButton = document.querySelector<HTMLButtonElement>("#mark")!;
 const backButton = document.querySelector<HTMLButtonElement>("#back")!;
 const progressLabel = document.querySelector<HTMLElement>("#progress")!;
+const shelf = document.querySelector<HTMLElement>("#shelf")!;
+const greeting = document.querySelector<HTMLElement>("#greeting")!;
+const storageLine = document.querySelector<HTMLElement>("#storage")!;
+const installLine = document.querySelector<HTMLElement>("#install")!;
+const updateLine = document.querySelector<HTMLElement>("#update")!;
 
 const store = new IdbStore();
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
@@ -492,12 +499,199 @@ async function applyTheme(theme: string): Promise<void> {
   // auto означает «как в системе»: тогда атрибута нет, и решают медиазапросы.
   if (theme === "auto") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", theme);
+  paintStatusBar();
   await store.saveSettings({ theme });
+}
+
+/**
+ * Красит полосу состояния под тему.
+ *
+ * С домашнего экрана читалка занимает весь экран, и белая полоса над ночной
+ * темой выглядит как чужая деталь. Цвет берётся прямо из темы, а не из списка:
+ * список разошёлся бы со стилями при первой же правке.
+ */
+function paintStatusBar(): void {
+  const meta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+  if (!meta) return;
+  const bg = getComputedStyle(document.documentElement).getPropertyValue("--bg").trim();
+  if (bg) meta.content = bg;
 }
 
 function nextTheme(current: string): string {
   const at = THEME_ORDER.indexOf(current as (typeof THEME_ORDER)[number]);
   return THEME_ORDER[(at + 1) % THEME_ORDER.length]!;
+}
+
+// --- полка -----------------------------------------------------------------
+
+/**
+ * Рисует список книг, оставшихся в браузере.
+ *
+ * Пока полка пуста, приглашение обычное; как только на ней что-то есть,
+ * главным становится список, а выбор файла — способом добавить ещё одну.
+ */
+async function fillShelf(): Promise<void> {
+  const { books, states } = await store.shelf();
+  const entries = shelfOrder(books, states);
+  shelf.innerHTML = "";
+  greeting.textContent = entries.length
+    ? "Ваши книги. Они остаются здесь и открываются без сети."
+    : "Читалка книг FB2 и EPUB. Откройте книгу с устройства.";
+
+  for (const entry of entries) {
+    const item = document.createElement("li");
+
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "shelf-open";
+    const name = document.createElement("span");
+    name.className = "shelf-title";
+    name.textContent = entry.title;
+    const about = document.createElement("span");
+    about.className = "shelf-about";
+    // Процент читателю важнее размера, поэтому он идёт первым; ни разу не
+    // открытая книга процента не имеет — у неё и места в книге ещё нет.
+    about.textContent = [
+      entry.percent === null ? "не открыта" : `${entry.percent}%`,
+      entry.author,
+      whenRead(entry.at),
+      bookSize(entry.size),
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    open.append(name, about);
+    open.addEventListener("click", () => void openStored(entry.hash));
+
+    const drop = document.createElement("button");
+    drop.type = "button";
+    drop.className = "shelf-drop";
+    drop.title = "Убрать книгу";
+    drop.setAttribute("aria-label", `Убрать книгу: ${entry.title}`);
+    drop.textContent = "✕";
+    drop.addEventListener("click", () => void dropBook(entry.hash));
+
+    item.append(open, drop);
+    shelf.append(item);
+  }
+  await showStorage(books);
+}
+
+/**
+ * Сколько места занято.
+ *
+ * Книги едят десятки мегабайт, и молчать об этом нечестно: место в браузере не
+ * бесконечно, а расходуется оно без спроса.
+ */
+async function showStorage(books?: readonly BookMeta[]): Promise<void> {
+  // Список обычно только что прочитан — читать его второй раз незачем.
+  const shown = books ?? (await store.shelf()).books;
+  if (!shown.length) {
+    storageLine.textContent = "";
+    return;
+  }
+  const taken = shown.reduce((sum, book) => sum + book.size, 0);
+  let line = `На полке ${plural(shown.length, "книга", "книги", "книг")}, ${bookSize(taken)}.`;
+  // Если браузер не обещал хранить книги, об этом надо сказать прямо: iOS
+  // чистит хранилище сайта, куда неделю не заходили, и книги пропадут молча.
+  if (!(await persisted()) && !standalone()) {
+    line += " Браузер может удалить их, если долго не заходить;" +
+      " добавьте читалку на домашний экран, чтобы этого не случилось.";
+  }
+  storageLine.textContent = line;
+}
+
+/**
+ * Приглашение поставить читалку на домашний экран.
+ *
+ * Там, где браузер предлагает установку сам, показывается кнопка; на iPhone
+ * такого предложения нет вовсе, поэтому остаётся сказать словами, каким путём
+ * это делается. И то и другое незачем показывать тому, кто уже поставил.
+ */
+let ready: { prompt(): void } | null = null;
+
+function showInstall(): void {
+  if (standalone()) {
+    installLine.hidden = true;
+    return;
+  }
+  installLine.hidden = false;
+  installLine.textContent = "";
+  if (ready) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Установить читалку";
+    button.addEventListener("click", () => ready?.prompt());
+    installLine.append(button);
+  } else {
+    installLine.textContent =
+      "Чтобы читать без браузера и без сети: «Поделиться» → «На экран „Домой“».";
+  }
+}
+
+/** Открыта ли читалка как приложение, а не вкладкой. */
+function standalone(): boolean {
+  return (
+    matchMedia("(display-mode: standalone)").matches ||
+    (navigator as { standalone?: boolean }).standalone === true
+  );
+}
+
+/** Обещал ли браузер хранить наши книги. */
+async function persisted(): Promise<boolean> {
+  try {
+    // В Safari этого нет вовсе — там ответ всегда «не обещал», и это правда.
+    return (await navigator.storage?.persisted?.()) ?? false;
+  } catch {
+    return false;
+  }
+}
+
+/** Открывает книгу, лежащую на полке. */
+async function openStored(hash: string): Promise<void> {
+  const meta = await store.bookMeta(hash);
+  const data = meta && (await store.bookFile(hash));
+  if (!meta || !data) {
+    showFailure("Книга пропала из хранилища — откройте файл заново.");
+    await fillShelf();
+    return;
+  }
+  await openBlob(data, meta.name);
+}
+
+async function dropBook(hash: string): Promise<void> {
+  await store.dropBook(hash);
+  await fillShelf();
+}
+
+/**
+ * Кладёт прочитанную книгу на полку.
+ *
+ * Отпечаток считается при разборе, поэтому книга сохраняется после него — и
+ * сохраняется тот же самый Blob, который уже держим: копировать нечего.
+ */
+async function keepBook(data: Blob, name: string, book: ParsedBook): Promise<void> {
+  try {
+    await store.putBook(
+      {
+        hash: book.hash,
+        name,
+        title: book.title,
+        author: book.author,
+        size: data.size,
+        addedAt: Date.now() / 1000,
+      },
+      data,
+    );
+    // Просить о постоянном хранении есть смысл только когда есть что хранить.
+    await navigator.storage?.persist?.().catch(() => false);
+  } catch (e) {
+    // Место кончилось — читать это не мешает, но молчать нельзя: читатель
+    // должен знать, что завтра книги здесь не будет.
+    const why = (e as Error).name === "QuotaExceededError"
+      ? "в браузере кончилось место"
+      : (e as Error).message;
+    storageLine.textContent = `Книга открыта, но не сохранена: ${why}. Уберите с полки лишнее.`;
+  }
 }
 
 // --- показ книги -----------------------------------------------------------
@@ -552,24 +746,38 @@ async function show(book: ParsedBook): Promise<void> {
   watchImages();
 }
 
-async function openFile(file: File): Promise<void> {
+/**
+ * Открывает книгу откуда угодно: из проводника или с полки.
+ *
+ * Разница только в том, откуда взялся Blob; всё остальное — разбор в потоке,
+ * показ, сохранение на полку — одно и то же.
+ */
+async function openBlob(data: Blob, name: string): Promise<void> {
   start.querySelector(".failure")?.remove();
   await closeOpen();
-  const reply = await ask({ kind: "parse", file });
+  const reply = await ask({ kind: "parse", data, name });
   // Пока читали, могли выбрать другую книгу: показываем только последнюю.
   if (reply.id !== ticket) return;
   if (!reply.ok) {
-    showFailure(`${file.name}: ${reply.error}`);
+    showFailure(`${name}: ${reply.error}`);
     return;
   }
   if (reply.kind !== "parse") return;
+  await keepBook(data, name, reply.book);
   await show(reply.book);
+}
+
+function openFile(file: File): Promise<void> {
+  return openBlob(file, file.name);
 }
 
 // --- события ---------------------------------------------------------------
 
 input.addEventListener("change", () => {
   const file = input.files?.[0];
+  // Поле сбрасывается, иначе выбор того же файла второй раз не считается
+  // изменением и книга просто не откроется.
+  input.value = "";
   if (file) void openFile(file);
 });
 
@@ -605,12 +813,15 @@ document.querySelector("#theme")!.addEventListener("click", () => {
 });
 
 document.querySelector("#close")!.addEventListener("click", () => {
-  void closeOpen().then(() => {
-    article.hidden = true;
-    bar.hidden = true;
-    start.hidden = false;
-    document.title = "fb2read";
-  });
+  // Экран переключается сразу, а место дописывается следом: ждать записи
+  // читателю незачем, а задержка на телефоне читается как «не нажалось».
+  article.hidden = true;
+  bar.hidden = true;
+  start.hidden = false;
+  document.title = "fb2read";
+  // Полка перерисовывается после записи: процент только что изменился, и
+  // список должен показывать то же, что показывала книга.
+  void closeOpen().then(() => fillShelf());
 });
 
 /**
@@ -695,3 +906,87 @@ void store.loadSettings().then((settings) => {
   const theme = typeof settings.theme === "string" ? settings.theme : "auto";
   if (theme !== "auto") document.documentElement.setAttribute("data-theme", theme);
 });
+
+// Полка рисуется сразу: ради неё читалку и открывают во второй раз.
+void fillShelf();
+paintStatusBar();
+showInstall();
+
+// Браузер сам сказал, что готов поставить читалку, — предлагаем кнопкой.
+window.addEventListener("beforeinstallprompt", (event) => {
+  event.preventDefault();
+  ready = event as unknown as { prompt(): void };
+  showInstall();
+});
+
+window.addEventListener("appinstalled", () => {
+  ready = null;
+  showInstall();
+  void showStorage();
+});
+
+/**
+ * Работник, который даёт читалке открываться без сети.
+ *
+ * Только в собранном виде: в `vite dev` он поселился бы навсегда и кормил бы
+ * разработчика вчерашними файлами. `updateViaCache: "none"` — чтобы сам
+ * `sw.js` не приезжал из кэша браузера: страницы Pages отдаются с большим
+ * сроком хранения, и обновление ждали бы неделю.
+ */
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+  void navigator.serviceWorker
+    .register(`${import.meta.env.BASE_URL}sw.js`, {
+      scope: import.meta.env.BASE_URL,
+      updateViaCache: "none",
+    })
+    .then(watchUpdate)
+    .catch(() => {
+      // Без работника читалка работает, просто требует сети.
+    });
+} else if (import.meta.env.DEV) {
+  // Работник, оставшийся от прошлой сборки, кормил бы `vite dev` старьём.
+  void navigator.serviceWorker?.getRegistrations().then((all) => {
+    for (const one of all) void one.unregister();
+  });
+}
+
+/** Показывает строку об обновлении, когда рядом ждёт новая сборка. */
+function watchUpdate(reg: ServiceWorkerRegistration): void {
+  // Перезагрузка бывает только по просьбе читателя.
+  //
+  // Событие смены работника приходит и при самой первой установке — работник
+  // забирает страницу себе. Без этой отметки читалка перезагружала бы себя
+  // прямо под читателем на первом же открытии книги.
+  let asked = false;
+
+  const offer = (worker: ServiceWorker | null): void => {
+    // Первая установка — это не обновление: подменять нечего.
+    if (!worker || !navigator.serviceWorker.controller) return;
+    updateLine.hidden = false;
+    updateLine.textContent = "Готово обновление читалки. ";
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = "Обновить";
+    button.addEventListener("click", () => {
+      asked = true;
+      worker.postMessage("обновиться");
+    });
+    updateLine.append(button);
+  };
+
+  offer(reg.waiting);
+  reg.addEventListener("updatefound", () => {
+    const fresh = reg.installing;
+    fresh?.addEventListener("statechange", () => {
+      if (fresh.state === "installed") offer(reg.waiting ?? fresh);
+    });
+  });
+
+  let reloading = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    // Перезагрузка ровно одна: событие приходит и по второму разу.
+    if (!asked || reloading) return;
+    reloading = true;
+    location.reload();
+  });
+}

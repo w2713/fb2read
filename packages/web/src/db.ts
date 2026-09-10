@@ -23,21 +23,54 @@ import {
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 
 const NAME = "fb2read";
-const VERSION = 1;
+const VERSION = 2;
+
+/**
+ * Книга, оставшаяся в браузере, — всё, кроме самих байтов.
+ *
+ * Байты лежат отдельным хранилищем нарочно. Список книг читается при каждом
+ * открытии читалки, и тащить ради него сорок мегабайт незачем; а главное —
+ * та же книга, открытая повторно, переписывала бы их целиком, если бы лежала
+ * с описанием в одной записи.
+ *
+ * Ключ — отпечаток содержимого: тот же, что у записи о месте, и тот же,
+ * которым книга зовётся на сервере синхронизации.
+ */
+export interface BookMeta {
+  hash: string;
+  /** Имя файла: у Blob своего имени нет, а показать книгу как-то надо. */
+  name: string;
+  title: string;
+  author: string;
+  size: number;
+  addedAt: number;
+}
 
 interface Schema extends DBSchema {
   /** Позиция и закладки: ключ — отпечаток книги. */
   state: { key: string; value: PositionRecord };
   /** Настройки читалки одной записью. */
   settings: { key: string; value: Settings };
+  /** Описания книг: ключ — тот же отпечаток. */
+  books: { key: string; value: BookMeta };
+  /** Сами байты, отдельно от описаний. */
+  files: { key: string; value: Blob };
 }
 
-/** Открывает базу, создавая хранилища при первом заходе. */
+/**
+ * Открывает базу, создавая недостающие хранилища.
+ *
+ * Хранилища досоздаются по одному, а не пересоздаются: во второй версии
+ * появились книги, и стереть при этом уже накопленные места и закладки —
+ * ровно то, чего читатель не простит.
+ */
 export function openState(name = NAME): Promise<IDBPDatabase<Schema>> {
   return openDB<Schema>(name, VERSION, {
     upgrade(db) {
       if (!db.objectStoreNames.contains("state")) db.createObjectStore("state");
       if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings");
+      if (!db.objectStoreNames.contains("books")) db.createObjectStore("books");
+      if (!db.objectStoreNames.contains("files")) db.createObjectStore("files");
     },
   });
 }
@@ -47,6 +80,17 @@ export class IdbStore implements StateStore {
 
   constructor(name = NAME) {
     this.db = openState(name);
+  }
+
+  /**
+   * Закрывает базу.
+   *
+   * Нужно там, где базу открывают заново в том же процессе: открытая старая
+   * версия не даёт обновиться новой. В самой читалке это не вызывается — там
+   * база живёт, пока живёт вкладка.
+   */
+  async close(): Promise<void> {
+    (await this.db).close();
   }
 
   private async entry(key: string): Promise<PositionRecord | null> {
@@ -120,6 +164,65 @@ export class IdbStore implements StateStore {
       });
     }
     return out.sort((a, b) => b.at - a.at);
+  }
+
+  // --- книги ----------------------------------------------------------------
+
+  /**
+   * Кладёт книгу на полку.
+   *
+   * Ключ — отпечаток содержимого, поэтому та же книга под другим именем ляжет
+   * на прежнее место, а не вторым списком: проверка на повтор здесь бесплатна.
+   * Байты знакомой книги не переписываются — они те же самые, а стоят сорок
+   * мегабайт записи на телефоне.
+   *
+   * Внутри сделки нельзя ждать ничего постороннего: сделка IndexedDB
+   * закрывается сама, стоит очереди задач опустеть, и второе действие уже не
+   * пройдёт. Поэтому здесь только `get` и `put`.
+   */
+  async putBook(meta: BookMeta, data: Blob): Promise<void> {
+    const db = await this.db;
+    const tx = db.transaction(["books", "files"], "readwrite");
+    const known = await tx.objectStore("books").get(meta.hash);
+    if (!known) await tx.objectStore("files").put(data, meta.hash);
+    // Время добавления у знакомой книги остаётся прежним: она на полке давно.
+    await tx.objectStore("books").put({ ...meta, addedAt: known?.addedAt ?? meta.addedAt }, meta.hash);
+    await tx.done;
+  }
+
+  /** Байты книги; описания без байтов не бывает, а вот наоборот — бывает. */
+  async bookFile(hash: string): Promise<Blob | null> {
+    return (await (await this.db).get("files", hash)) ?? null;
+  }
+
+  async bookMeta(hash: string): Promise<BookMeta | null> {
+    return (await (await this.db).get("books", hash)) ?? null;
+  }
+
+  /**
+   * Убирает книгу с полки.
+   *
+   * Запись о месте и закладках остаётся: она занимает считаные байты, а
+   * синхронизация на ней держится — надгробия снятых закладок должны дожить до
+   * следующего обмена. Вернув ту же книгу, читатель попадёт туда, где бросил.
+   */
+  async dropBook(hash: string): Promise<void> {
+    const tx = (await this.db).transaction(["books", "files"], "readwrite");
+    await tx.objectStore("books").delete(hash);
+    await tx.objectStore("files").delete(hash);
+    await tx.done;
+  }
+
+  /** Всё, что лежит на полке, вместе с записями о местах. */
+  async shelf(): Promise<{ books: BookMeta[]; states: PositionRecord[] }> {
+    const db = await this.db;
+    const books = await db.getAll("books");
+    const states: PositionRecord[] = [];
+    for (const book of books) {
+      const state = await db.get("state", book.hash);
+      if (state) states.push(state);
+    }
+    return { books, states };
   }
 
   // --- то, что понадобится синхронизации ------------------------------------

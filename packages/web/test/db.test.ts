@@ -137,3 +137,84 @@ describe("недавние", () => {
     expect((await store.recent())[0]!.percent).toBe(50);
   });
 });
+
+describe("книги на полке", () => {
+  const байты = (text: string) => new Blob([new TextEncoder().encode(text)]);
+  const описание = (hash: string, extra = {}) => ({
+    hash,
+    name: "Каренина.fb2",
+    title: "Анна Каренина",
+    author: "Лев Толстой",
+    size: 12,
+    addedAt: 1000,
+    ...extra,
+  });
+
+  it("книга кладётся и читается обратно", async () => {
+    await store.putBook(описание(КНИГА), байты("это книга"));
+    const back = await store.bookFile(КНИГА);
+    expect(await back!.text()).toBe("это книга");
+    expect((await store.bookMeta(КНИГА))!.title).toBe("Анна Каренина");
+  });
+
+  it("та же книга второй раз не удваивается", async () => {
+    await store.putBook(описание(КНИГА), байты("это книга"));
+    await store.putBook(описание(КНИГА, { name: "другое имя.fb2" }), байты("это книга"));
+    const { books } = await store.shelf();
+    expect(books).toHaveLength(1);
+    // Имя обновилось, а время добавления осталось прежним: книга на полке давно.
+    expect(books[0]).toMatchObject({ name: "другое имя.fb2", addedAt: 1000 });
+  });
+
+  it("удаление убирает и описание, и байты", async () => {
+    await store.putBook(описание(КНИГА), байты("это книга"));
+    await store.dropBook(КНИГА);
+    expect(await store.bookMeta(КНИГА)).toBeNull();
+    expect(await store.bookFile(КНИГА)).toBeNull();
+  });
+
+  it("удаление книги не трогает место и закладки", async () => {
+    // Место занимает считаные байты, а синхронизация на нём держится: вернув
+    // ту же книгу, читатель должен попасть туда, где бросил.
+    await store.putBook(описание(КНИГА), байты("это книга"));
+    await store.savePosition(КНИГА, record(300));
+    await store.saveBookmarks(КНИГА, [{ block: 42, name: "тут" }], {});
+    await store.dropBook(КНИГА);
+
+    expect(await store.loadPosition(КНИГА)).toBe(300);
+    expect(await store.loadBookmarks(КНИГА)).toHaveLength(1);
+  });
+
+  it("полка отдаёт книги вместе с их местами", async () => {
+    await store.putBook(описание(КНИГА), байты("раз"));
+    await store.putBook(описание(ДРУГАЯ), байты("два"));
+    await store.savePosition(КНИГА, record(120));
+
+    const { books, states } = await store.shelf();
+    expect(books.map((b) => b.hash).sort()).toEqual([КНИГА, ДРУГАЯ].sort());
+    // Запись о месте только у той книги, которую открывали.
+    expect(states).toHaveLength(1);
+    expect(states[0]!.hash).toBe(КНИГА);
+  });
+});
+
+describe("переход на вторую версию базы", () => {
+  it("книги появляются, а места и закладки остаются", async () => {
+    // База могла остаться от прошлого выпуска: стереть при обновлении места и
+    // закладки — ровно то, чего читатель не простит.
+    const name = `старая-${++counter}`;
+    const before = new IdbStore(name);
+    await before.savePosition(КНИГА, record(77));
+    await before.saveBookmarks(КНИГА, [{ block: 5, name: "закладка" }], {});
+    await before.close();
+
+    const after = new IdbStore(name);
+    expect(await after.loadPosition(КНИГА)).toBe(77);
+    expect(await after.loadBookmarks(КНИГА)).toHaveLength(1);
+    await after.putBook(
+      { hash: ДРУГАЯ, name: "к.fb2", title: "К", author: "", size: 3, addedAt: 1 },
+      new Blob(["три"]),
+    );
+    expect(await after.bookFile(ДРУГАЯ)).not.toBeNull();
+  });
+});
