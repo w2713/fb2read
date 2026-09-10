@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="color-scheme" content="light dark" />
+    <title>fb2read</title>
+
+    <!-- Пути пишутся от корня с одной косой: базовый путь Vite подставит сам,
+         а написанный руками он подставит вторым разом. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon-180.png" />
+    <meta name="theme-color" content="#ffffff" />
+    <!-- Без display: standalone и этой строки iOS открывает читалку с
+         адресной строкой, то есть обычной вкладкой, а не приложением. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="fb2read" />
+
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <!-- Панель и списки — один прилипающий блок: порознь они наезжали друг на
+         друга, стоило кнопкам перенестись на вторую строку. -->
+    <div id="top">
+      <header id="bar" hidden>
+        <button type="button" id="close" title="Закрыть книгу" aria-label="Закрыть книгу">
+          ←
+        </button>
+        <button type="button" id="toc-toggle">Оглавление</button>
+        <button type="button" id="find-toggle">Поиск</button>
+        <button type="button" id="marks-toggle">Закладки</button>
+        <button type="button" id="mark" title="Поставить закладку" aria-label="Поставить закладку">
+          ☆
+        </button>
+        <!-- Появляется только после перехода по сноске: возвращаться иначе некуда. -->
+        <button type="button" id="back" title="Вернуться из сноски" hidden>Назад</button>
+        <span id="progress"></span>
+        <button type="button" id="theme" title="Сменить тему" aria-label="Сменить тему">
+          Тема
+        </button>
+      </header>
+
+      <div id="panel" hidden>
+        <nav id="toc" hidden></nav>
+
+        <section id="find" hidden>
+          <form id="find-form">
+            <input id="q" type="search" placeholder="Найти в книге" autocomplete="off" />
+            <button type="submit">Искать</button>
+            <button type="button" id="find-prev" title="Предыдущее совпадение">←</button>
+            <button type="button" id="find-next" title="Следующее совпадение">→</button>
+          </form>
+          <p id="find-count" class="note-line"></p>
+          <ul id="found"></ul>
+        </section>
+
+        <section id="marks" hidden>
+          <p id="marks-empty" class="note-line" hidden>Закладок пока нет.</p>
+          <ul id="mark-list"></ul>
+          <button type="button" id="marks-export">Выгрузить в markdown</button>
+        </section>
+      </div>
+    </div>
+
+    <main id="app">
+      <section id="start">
+        <h1>fb2read</h1>
+        <p id="greeting">Читалка книг FB2 и EPUB. Откройте книгу с устройства.</p>
+        <label class="pick">
+          <input type="file" id="file" accept=".fb2,.fb2.zip,.fbz,.epub,.zip" />
+          <span>Выбрать книгу</span>
+        </label>
+        <p class="hint">Или перетащите файл сюда.</p>
+
+        <!-- Книга остаётся в браузере: искать её в «Файлах» второй раз никто
+             не станет, а на телефоне это и вовсе конец всей затее. -->
+        <ul id="shelf"></ul>
+        <p id="storage" class="hint"></p>
+
+        <!-- Обмен с сервером: без адреса читалка о нём и не заговаривает. -->
+        <section id="sync">
+          <p class="hint">
+            <button type="button" id="sync-now" hidden>Синхронизировать</button>
+            <button type="button" id="sync-setup">Синхронизация…</button>
+            <span id="sync-note"></span>
+          </p>
+          <form id="sync-form" hidden>
+            <label>Адрес сервера<input id="sync-url" type="url" placeholder="https://books.example.org" autocomplete="off" /></label>
+            <label>Токен<input id="sync-token" type="password" autocomplete="off" /></label>
+            <label>Имя устройства<input id="sync-device" type="text" autocomplete="off" /></label>
+            <label class="row">
+              <input id="sync-auto" type="checkbox" checked />
+              Обмениваться при закрытии книги
+            </label>
+            <button type="submit">Сохранить</button>
+          </form>
+        </section>
+        <p id="install" class="hint" hidden></p>
+        <p id="update" class="hint" hidden></p>
+      </section>
+      <article id="book" hidden></article>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

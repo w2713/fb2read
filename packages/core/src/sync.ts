@@ -187,9 +187,18 @@ export class SyncClient {
     if (options.token) checkToken(options.token);
     this.base = `${trimSlashes(options.url)}/api/v1`;
     this.timeoutMs = options.timeoutMs ?? 10_000;
-    const send = options.fetch ?? ambient.fetch;
-    if (!send) throw new SyncError("здесь нет fetch: синхронизация недоступна");
-    this.send = send;
+    const send = options.fetch;
+    if (send) {
+      this.send = send;
+    } else if (ambient.fetch) {
+      // Обёртка, а не сама функция: в браузере `fetch`, вызванный в отрыве от
+      // окна, отвечает «Illegal invocation» — ему нужен свой хозяин. В Node
+      // это сходило с рук, поэтому вылезло только на настоящей странице.
+      const own = ambient.fetch;
+      this.send = (url, init) => own.call(globalThis, url, init);
+    } else {
+      throw new SyncError("здесь нет fetch: синхронизация недоступна");
+    }
   }
 
   private headers(extra: Record<string, string> = {}): Record<string, string> {
@@ -206,7 +215,10 @@ export class SyncClient {
    */
   private async request(path: string, init: SyncRequest = {}): Promise<SyncResponse> {
     const controller = ambient.AbortController ? new ambient.AbortController() : null;
-    const timer = controller ? ambient.setTimeout?.(() => controller.abort(), this.timeoutMs) : null;
+    // Часы вызываются от хозяина по той же причине, что и fetch.
+    const timer = controller
+      ? ambient.setTimeout?.call(globalThis, () => controller.abort(), this.timeoutMs)
+      : null;
     let response: SyncResponse;
     try {
       response = await this.send(`${this.base}${path}`, { ...init, signal: controller?.signal });
@@ -214,7 +226,7 @@ export class SyncClient {
       const reason = (e as Error).name === "AbortError" ? "сервер не ответил вовремя" : (e as Error).message;
       throw new SyncError(`сервер недоступен: ${reason}`);
     } finally {
-      if (timer !== null) ambient.clearTimeout?.(timer);
+      if (timer !== null) ambient.clearTimeout?.call(globalThis, timer);
     }
     if (!response.ok) throw new SyncError(await describe(response), response.status);
     return response;

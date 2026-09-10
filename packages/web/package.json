@@ -1,0 +1,17 @@
+{
+  "name": "@fb2read/web",
+  "version": "0.14.0",
+  "private": true,
+  "type": "module",
+  "description": "Читалка fb2read для браузера",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@fb2read/core": "workspace:*",
+    "idb": "^8.0.0",
+    "vite": "^6.0.0"
+  }
+}

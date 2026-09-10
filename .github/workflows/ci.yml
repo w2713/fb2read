@@ -38,8 +38,19 @@ jobs:
         with: { node-version: 22, cache: pnpm }
       - uses: oven-sh/setup-bun@v2
       - run: pnpm install --frozen-lockfile
+      # Читалку для браузера проверяет настоящий Chromium: подделка не покажет
+      # ни сломанный Worker, ни развалившуюся кодировку.
+      - run: npx playwright install --with-deps chromium
       # Собирается всё: сквозная проверка синхронизации запускает и сервер.
       - run: pnpm build
+      # Единственное место, где браузерные проверки вообще выполняются: в
+      # матрице `test` Chromium не ставится, и они там молча пропускаются.
+      # Без этого шага тридцать с лишним проверок читалки не работали бы нигде,
+      # кроме моей машины.
+      # Из корня, а не из пакета: в пакете нет своего конфига, и vitest
+      # подхватил бы там скомпилированные копии тестов из dist-types.
+      - name: Проверить читалку в браузере
+        run: pnpm exec vitest run packages/web/test
       - name: Проверить сборку под Bun
         run: |
           bun packages/cli/dist/fb2read.mjs --version

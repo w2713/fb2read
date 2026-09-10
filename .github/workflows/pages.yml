@@ -1,8 +1,9 @@
-name: Страница с установщиками
+name: Страница с установщиками и читалкой
 
-# Кладёт install.sh и install.ps1 на GitHub Pages, чтобы строка установки
-# была короткой и не зависела от того, как устроен репозиторий внутри.
-# Позже сюда же приедет читалка для браузера.
+# Кладёт на GitHub Pages две вещи: install.sh с install.ps1 в корень, чтобы
+# строка установки была короткой, и читалку для браузера в /app/. Корень
+# трогать нельзя — ссылки на установщики зашиты в README и в уже выпущенные
+# установщики.
 on:
   push:
     branches: [main]
@@ -10,6 +11,10 @@ on:
       - scripts/install.sh
       - scripts/install.ps1
       - .github/workflows/pages.yml
+      - packages/web/**
+      - packages/core/**
+      - package.json
+      - pnpm-lock.yaml
   workflow_dispatch:
 
 permissions:
@@ -29,18 +34,30 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with: { version: 10 }
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      # Ставится только то, что нужно читалке: терминальная часть тянет
+      # node-pty, который собирается из исходников и странице ни к чему.
+      - run: pnpm install --frozen-lockfile --filter "@fb2read/web..."
+      - run: pnpm --filter @fb2read/web build
       - name: Собрать страницу
         run: |
           set -eu
-          mkdir -p site
+          mkdir -p site/app
           cp scripts/install.sh scripts/install.ps1 site/
+          # Точка в конце обязательна: без неё dist ляжет каталогом внутрь.
+          cp -r packages/web/dist/. site/app/
           # Простая страница на случай, если по адресу зайдут браузером.
           cat > site/index.html <<'HTML'
           <!doctype html>
           <html lang="ru">
           <meta charset="utf-8">
           <meta name="viewport" content="width=device-width, initial-scale=1">
-          <title>fb2read — читалка FB2 и EPUB для терминала</title>
+          <title>fb2read — читалка FB2 и EPUB</title>
           <style>
             body { max-width: 40rem; margin: 3rem auto; padding: 0 1rem;
                    font: 16px/1.6 system-ui, sans-serif; }
@@ -52,13 +69,16 @@ jobs:
             }
           </style>
           <h1>fb2read</h1>
-          <p>Читалка книг FB2 и EPUB для терминала.</p>
+          <p>Читалка книг FB2 и EPUB: в терминале и в браузере.</p>
           <h2>Linux и macOS</h2>
           <pre>curl -fsSL https://w2713.github.io/fb2read/install.sh | sh</pre>
           <h2>Windows</h2>
           <pre>irm https://w2713.github.io/fb2read/install.ps1 | iex</pre>
           <h2>Android (Termux) и всё остальное</h2>
           <pre>npm install -g fb2read</pre>
+          <h2>iPhone и любой браузер</h2>
+          <p><a href="./app/">Открыть читалку</a> — книги остаются в браузере,
+          работает без сети и ставится на экран «Домой».</p>
           <p><a href="https://github.com/w2713/fb2read">Исходный код и описание</a></p>
           HTML
       - uses: actions/configure-pages@v5

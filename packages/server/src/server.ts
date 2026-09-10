@@ -141,12 +141,19 @@ export function createHandler(options: ServerOptions) {
   const storage = new Storage(options.dir);
   const maxBytes = options.maxBytes ?? DEFAULT_MAX_BYTES;
 
+  // Заголовки перечисляются все, какие шлёт клиент: браузер сверяет список
+  // до запроса и молча отменяет тот, где встретился незаявленный. Название и
+  // автор едут в X-Title и X-Author, и без них не загрузилась бы ни одна
+  // книга с названием — то есть ни одна.
   const cors: Record<string, string> = options.origin
     ? {
         "Access-Control-Allow-Origin": options.origin,
         "Access-Control-Allow-Methods": "GET, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Authorization, Content-Type, X-Name",
+        "Access-Control-Allow-Headers":
+          "Authorization, Content-Type, X-Name, X-Title, X-Author",
         "Access-Control-Max-Age": "86400",
+        // Ответ зависит от того, кто спросил: без этого его закэшируют для всех.
+        Vary: "Origin",
       }
     : {};
 
