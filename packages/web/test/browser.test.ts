@@ -227,6 +227,13 @@ async function savedNear(page: Page, want: number): Promise<boolean> {
   return block !== undefined && Math.abs(block - want) <= 1;
 }
 
+/** Блоки закладок, действительно записанных в хранилище. */
+async function savedMarks(page: Page): Promise<number[]> {
+  const [record] = await savedRecords(page);
+  const marks = (record?.bookmarks ?? []) as { block: number; deleted?: boolean }[];
+  return marks.filter((mark) => !mark.deleted).map((mark) => mark.block);
+}
+
 /** Что записано в IndexedDB о месте в книге. */
 async function savedBlocks(page: Page): Promise<number[]> {
   return (await savedRecords(page)).map((record) => record.block);
@@ -541,6 +548,10 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     const at = await page.$eval("#book .marked", (n) => Number(n.getAttribute("data-block")));
     expect(Math.abs(at - 40)).toBeLessThanOrEqual(1);
     expect(await page.textContent("#mark")).toBe("★");
+
+    // Ждём саму запись, а не отметку на экране: на экране закладка появляется
+    // сразу, а в хранилище ложится следом, и перезагрузка успевала её обогнать.
+    await expect.poll(() => savedMarks(page), { timeout: 10_000 }).toEqual([at]);
 
     await page.reload();
     await give(page, "Долгая книга.fb2", longBook());
