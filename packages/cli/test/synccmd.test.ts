@@ -442,3 +442,98 @@ describe("выгрузка каталогом", () => {
     expect(await cmdPush({ url: "http://127.0.0.1:1" }, undefined, false, store())).toBe(2);
   });
 });
+
+describe("удаление книги с сервера", () => {
+  /** Сервер, помнящий, что у него просили удалить. */
+  function raise(books: { hash: string; name: string; title: string }[]): Promise<{
+    url: string;
+    deleted: string[];
+    close: () => Promise<void>;
+  }> {
+    const deleted: string[] = [];
+    const s = createServer((request, response) => {
+      const path = (request.url ?? "").split("?")[0]!;
+      if (request.method === "DELETE" && path.startsWith("/api/v1/books/")) {
+        deleted.push(path.slice("/api/v1/books/".length));
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ ok: true }));
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          books: books.map((b) => ({ ...b, size: 1, author: "", updatedAt: 1 })),
+        }),
+      );
+    });
+    return new Promise((done) => {
+      s.listen(0, "127.0.0.1", () =>
+        done({
+          url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`,
+          deleted,
+          close: () => new Promise<void>((r) => s.close(() => r())),
+        }),
+      );
+    });
+  }
+
+  const ОДНА = "1".repeat(64);
+  const ДРУГАЯ = "2".repeat(64);
+  // Общее начало с ОДНОЙ: именно так и возникает неоднозначность.
+  const ПОХОЖАЯ = "1".repeat(8) + "3".repeat(56);
+
+  async function forget(target: string | undefined, books = [{ hash: ОДНА, name: "к.fb2", title: "Книга" }]) {
+    const { cmdForget } = await import("../src/sync.js");
+    const сервер = await raise(books);
+    try {
+      const code = await cmdForget({ url: сервер.url, token: "proba-token" }, target);
+      return { code, deleted: сервер.deleted };
+    } finally {
+      await сервер.close();
+    }
+  }
+
+  it("удаляет книгу по началу отпечатка", async () => {
+    // Отпечаток целиком никто набирать не станет — как и с номерами коммитов.
+    const { code, deleted } = await forget(ОДНА.slice(0, 8));
+    expect(code).toBe(0);
+    expect(deleted).toEqual([ОДНА]);
+  });
+
+  it("удаляет книгу по имени файла", async () => {
+    const { code, deleted } = await forget("к.fb2");
+    expect(code).toBe(0);
+    expect(deleted).toEqual([ОДНА]);
+  });
+
+  it("при неоднозначности не удаляет ничего, а спрашивает", async () => {
+    // Удаление необратимо: выбрать за читателя тут нельзя. Начало отпечатка
+    // подходит двум книгам — значит, не удаляется ни одна.
+    const { code, deleted } = await forget("1".repeat(8), [
+      { hash: ОДНА, name: "первая.fb2", title: "Первая" },
+      { hash: ПОХОЖАЯ, name: "вторая.fb2", title: "Вторая" },
+    ]);
+    expect(code).toBe(1);
+    expect(deleted).toEqual([]);
+  });
+
+  it("книга с чужим началом отпечатка под удаление не попадает", async () => {
+    const { code, deleted } = await forget(ОДНА.slice(0, 8), [
+      { hash: ОДНА, name: "первая.fb2", title: "Первая" },
+      { hash: ДРУГАЯ, name: "вторая.fb2", title: "Вторая" },
+    ]);
+    expect(code).toBe(0);
+    expect(deleted).toEqual([ОДНА]);
+  });
+
+  it("о ненайденной книге говорит словами", async () => {
+    const { code, deleted } = await forget("нет-такой");
+    expect(code).toBe(1);
+    expect(deleted).toEqual([]);
+  });
+
+  it("без аргумента объясняет, чего ждали", async () => {
+    const { cmdForget } = await import("../src/sync.js");
+    expect(await cmdForget({ url: "http://127.0.0.1:1" }, undefined)).toBe(2);
+  });
+});

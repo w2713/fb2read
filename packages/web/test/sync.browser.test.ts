@@ -182,6 +182,17 @@ async function give(page: Page, name: string, text: string): Promise<void> {
   );
 }
 
+/** Что видно на полке: облако значит «есть на сервере, но не здесь». */
+function полка(page: Page): Promise<string[]> {
+  return page.$$eval("#shelf li", (rows) =>
+    rows.map(
+      (li) =>
+        (li.className.includes("shelf-remote") ? "☁ " : "") +
+        (li.querySelector(".shelf-title")?.textContent ?? ""),
+    ),
+  );
+}
+
 describe.skipIf(!CHROME)("обмен с сервером", () => {
   it("книга и место уезжают на сервер и приезжают на другое устройство", async () => {
     // Первое устройство: открыло книгу, почитало, синхронизировалось.
@@ -268,6 +279,86 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     await первое.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
     await первое.click("#marks-toggle");
     expect(await первое.$$eval("#mark-list .mark-go", (n) => n.length)).toBe(0);
+
+    await первое.close();
+    await второе.close();
+  }, SLOW);
+
+  it("убранная с полки книга не возвращается при обмене", async () => {
+    // Самое обидное поведение из возможных: читатель чистит полку телефона, а
+    // книги приезжают обратно. Убрать — значит убрать.
+    const page = await browser.newPage();
+    await page.goto(base);
+    await setUp(page);
+    await give(page, "Убранная.fb2", BOOK.replace("Книга с ноутбука", "Книга убранная"));
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await page.click("#close");
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+    expect(await обменяться(page)).not.toContain("не вышло");
+
+    await page.click("li:not(.shelf-remote):has-text('Книга убранная') .shelf-drop");
+    await page.waitForSelector(".shelf-remote:has-text('Книга убранная')", { timeout: 10_000 });
+
+    // Обмен после снятия: книга должна остаться облаком, а не лечь на полку.
+    expect(await обменяться(page)).not.toContain("не вышло");
+    const после = await полка(page);
+    expect(после).toContain("☁ ☁ Книга убранная");
+    expect(после).not.toContain("Книга убранная");
+    await page.close();
+  }, SLOW);
+
+  it("снятую книгу можно вернуть касанием", async () => {
+    // Иначе «убрать» значило бы «спрятать навсегда»: файла уже нет, а обмен
+    // за ней больше не пойдёт.
+    const page = await browser.newPage();
+    await page.goto(base);
+    await setUp(page);
+    await give(page, "Возврат.fb2", BOOK.replace("Книга с ноутбука", "Книга возврата"));
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await page.click("#close");
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+    expect(await обменяться(page)).not.toContain("не вышло");
+
+    await page.click("li:not(.shelf-remote):has-text('Книга возврата') .shelf-drop");
+    await page.waitForSelector(".shelf-remote:has-text('Книга возврата')", { timeout: 10_000 });
+
+    await page.click(".shelf-remote:has-text('Книга возврата') .shelf-open");
+    // Вернувшаяся книга сразу открывается: за ней и шли.
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    expect(await page.textContent("#book")).toContain("Абзац номер 1.");
+    await page.click("#close");
+    await page.waitForSelector("li:not(.shelf-remote):has-text('Книга возврата')", { timeout: 10_000 });
+    await page.close();
+  }, SLOW);
+
+  it("удаление с сервера убирает книгу и у другого устройства", async () => {
+    const первое = await browser.newPage();
+    await первое.goto(base);
+    await setUp(первое);
+    await give(первое, "Ненужная.fb2", BOOK.replace("Книга с ноутбука", "Книга ненужная"));
+    await первое.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await первое.click("#close");
+    await первое.waitForSelector("#shelf li", { timeout: 10_000 });
+    expect(await обменяться(первое)).not.toContain("не вышло");
+
+    // Снимаем с полки, а затем удаляем с сервера — согласие спрашивается,
+    // потому что книга исчезнет у всех.
+    await первое.click("li:not(.shelf-remote):has-text('Книга ненужная') .shelf-drop");
+    await первое.waitForSelector(".shelf-remote:has-text('Книга ненужная')", { timeout: 10_000 });
+    первое.once("dialog", (d) => void d.accept());
+    await первое.click(".shelf-remote:has-text('Книга ненужная') .shelf-drop");
+    await первое.waitForFunction(
+      () => !document.querySelector("#shelf")!.textContent!.includes("Книга ненужная"),
+      undefined,
+      { timeout: 10_000 },
+    );
+
+    // Второе устройство её уже не получит.
+    const второе = await browser.newPage();
+    await второе.goto(base);
+    await setUp(второе);
+    await обменяться(второе);
+    expect((await полка(второе)).join(" ")).not.toContain("Книга ненужная");
 
     await первое.close();
     await второе.close();

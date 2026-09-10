@@ -407,6 +407,54 @@ export function safeFileName(name: string): string {
   return cleaned || "книга.fb2";
 }
 
+// --- fb2read forget --------------------------------------------------------
+
+/**
+ * Удаляет книгу с сервера вместе с её местом и закладками.
+ *
+ * Без этого выгруженную книгу нельзя убрать никак: она остаётся на сервере
+ * навсегда и приезжает на каждое новое устройство. Отпечаток набирать целиком
+ * не надо — годится начало, как и в pull.
+ */
+export async function cmdForget(prefs: SyncPrefs, target: string | undefined): Promise<number> {
+  const settings = prepare(prefs);
+  if (!settings) return 2;
+  if (!target) {
+    err("укажите книгу: fb2read forget <отпечаток|имя>");
+    return 2;
+  }
+
+  const client = clientFor(settings, 60_000);
+  let books: RemoteBook[];
+  try {
+    books = await client.list();
+  } catch (e) {
+    return complain(e);
+  }
+
+  const wanted = books.filter((b) => b.hash.startsWith(target) || b.name === target);
+  if (!wanted.length) {
+    err(`на сервере нет «${target}»`);
+    return 1;
+  }
+  if (wanted.length > 1) {
+    // Удаление необратимо, поэтому при неоднозначности — вопрос, а не выбор
+    // за читателя.
+    err(`под «${target}» подходит несколько книг, уточните:`);
+    for (const b of wanted) err(`  ${b.hash.slice(0, 12)}  ${b.name}`);
+    return 1;
+  }
+
+  const book = wanted[0]!;
+  try {
+    await client.remove(book.hash);
+    out(`удалено с сервера: ${book.title || book.name}`);
+    return 0;
+  } catch (e) {
+    return complain(e);
+  }
+}
+
 // --- fb2read sync ----------------------------------------------------------
 
 /** Двусторонний обмен состоянием: книги не передаются. */

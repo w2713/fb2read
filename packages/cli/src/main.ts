@@ -25,6 +25,7 @@ import { configFile } from "./paths.js";
 import { JsonFileStore } from "./store.js";
 import {
   cmdPull,
+  cmdForget,
   cmdPush,
   cmdRemote,
   cmdSync,
@@ -149,6 +150,8 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
         return cmdPush(config.sync, args.file, args.all, store);
       case "pull":
         return cmdPull(config.sync, args.file, args.all, store);
+      case "forget":
+        return cmdForget(config.sync, args.file);
     }
   }
 

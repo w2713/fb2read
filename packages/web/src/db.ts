@@ -23,7 +23,7 @@ import {
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 
 const NAME = "fb2read";
-const VERSION = 2;
+const VERSION = 3;
 
 /**
  * Книга, оставшаяся в браузере, — всё, кроме самих байтов.
@@ -55,6 +55,14 @@ interface Schema extends DBSchema {
   books: { key: string; value: BookMeta };
   /** Сами байты, отдельно от описаний. */
   files: { key: string; value: Blob };
+  /**
+   * Книги, снятые с этой полки: ключ — отпечаток, значение — когда сняли.
+   *
+   * Без этого списка «убрать» не работает вовсе: обмен видит, что книги на
+   * устройстве нет, и добросовестно скачивает её обратно. Список местный и на
+   * сервер не едет — снять книгу с телефона не значит отобрать её у ноутбука.
+   */
+  dropped: { key: string; value: number };
 }
 
 /**
@@ -71,6 +79,7 @@ export function openState(name = NAME): Promise<IDBPDatabase<Schema>> {
       if (!db.objectStoreNames.contains("settings")) db.createObjectStore("settings");
       if (!db.objectStoreNames.contains("books")) db.createObjectStore("books");
       if (!db.objectStoreNames.contains("files")) db.createObjectStore("files");
+      if (!db.objectStoreNames.contains("dropped")) db.createObjectStore("dropped");
     },
   });
 }
@@ -207,10 +216,23 @@ export class IdbStore implements StateStore {
    * следующего обмена. Вернув ту же книгу, читатель попадёт туда, где бросил.
    */
   async dropBook(hash: string): Promise<void> {
-    const tx = (await this.db).transaction(["books", "files"], "readwrite");
+    const tx = (await this.db).transaction(["books", "files", "dropped"], "readwrite");
     await tx.objectStore("books").delete(hash);
     await tx.objectStore("files").delete(hash);
+    // Отметка о снятии — в той же сделке, что и удаление: иначе между ними
+    // мог бы влезть обмен и вернуть книгу обратно.
+    await tx.objectStore("dropped").put(Date.now() / 1000, hash);
     await tx.done;
+  }
+
+  /** Отпечатки книг, снятых с этой полки. */
+  async dropped(): Promise<Set<string>> {
+    return new Set(await (await this.db).getAllKeys("dropped"));
+  }
+
+  /** Снимает отметку: книгу снова можно скачивать. */
+  async undrop(hash: string): Promise<void> {
+    await (await this.db).delete("dropped", hash);
   }
 
   /** Всё, что лежит на полке, вместе с записями о местах. */

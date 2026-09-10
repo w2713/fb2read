@@ -25,7 +25,14 @@ import { firstFrom, step } from "./find.js";
 import { marked, removeMark, sortedMarks, toggleMark } from "./marks.js";
 import { keepPosition, topmost, type Keeper } from "./position.js";
 import { renderBook, renderOne } from "./render.js";
-import { exchange, guessDevice, syncSettings, type SyncSettings } from "./sync.js";
+import {
+  exchange,
+  fetchBook,
+  forgetBook,
+  guessDevice,
+  syncSettings,
+  type SyncSettings,
+} from "./sync.js";
 import { bookSize, shelfOrder, whenRead } from "./shelf.js";
 import type { Ask, ParsedBook, Reply } from "./worker.js";
 
@@ -582,7 +589,71 @@ async function fillShelf(): Promise<void> {
     item.append(open, drop);
     shelf.append(item);
   }
+
+  await fillDropped();
   await showStorage(books);
+}
+
+/**
+ * Снятые книги — облаком, как в терминале.
+ *
+ * Иначе «убрать» значило бы «спрятать навсегда»: файла на устройстве уже нет,
+ * а обмен книгу больше не вернёт. Строка строится по местной записи о месте —
+ * она остаётся после снятия, — поэтому список рисуется и без сети.
+ */
+async function fillDropped(): Promise<void> {
+  // Без сервера возвращать книгу неоткуда, и обещать это нечестно.
+  if (!server) return;
+  for (const hash of await store.dropped()) {
+    const record = await store.record(hash);
+    if (!record) continue;
+
+    const item = document.createElement("li");
+    item.className = "shelf-remote";
+
+    const get = document.createElement("button");
+    get.type = "button";
+    get.className = "shelf-open";
+    const name = document.createElement("span");
+    name.className = "shelf-title";
+    name.textContent = `☁ ${record.title || "книга"}`;
+    const about = document.createElement("span");
+    about.className = "shelf-about";
+    about.textContent = [record.author, "на сервере"].filter(Boolean).join(" · ");
+    get.append(name, about);
+    get.addEventListener("click", () => void returnBook(hash));
+
+    const forget = document.createElement("button");
+    forget.type = "button";
+    forget.className = "shelf-drop";
+    forget.title = "Удалить с сервера";
+    forget.setAttribute("aria-label", `Удалить с сервера: ${record.title || "книга"}`);
+    forget.textContent = "✕";
+    forget.addEventListener("click", () => void forgetOnServer(hash, record.title));
+
+    item.append(get, forget);
+    shelf.append(item);
+  }
+}
+
+/** Возвращает снятую книгу с сервера и открывает её. */
+async function returnBook(hash: string): Promise<void> {
+  if (!server) return;
+  syncNote.textContent = "забираю с сервера…";
+  syncNote.textContent = await fetchBook(store, server, hash);
+  await fillShelf();
+  if (await store.bookMeta(hash)) await openStored(hash);
+}
+
+/** Удаляет книгу с сервера — по одному подтверждению, как всякую потерю. */
+async function forgetOnServer(hash: string, title: string): Promise<void> {
+  if (!server) return;
+  const name = title || "эту книгу";
+  // Книга исчезнет у всех устройств, поэтому спрашиваем. Убрать с полки —
+  // дело обратимое и спроса не требует, а это нет.
+  if (!window.confirm(`Удалить ${name} с сервера? Она исчезнет на всех устройствах.`)) return;
+  syncNote.textContent = await forgetBook(store, server, hash);
+  await fillShelf();
 }
 
 /**
