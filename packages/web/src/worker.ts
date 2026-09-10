@@ -1,13 +1,17 @@
 /**
- * Разбор книги в отдельном потоке.
+ * Разбор книги и выдача картинок в отдельном потоке.
  *
  * Книга на сорок мегабайт разбирается заметное время, и делать это в основном
  * потоке значит заморозить страницу: на телефоне это выглядит как зависшее
  * приложение. Здесь же считается и отпечаток — он нужен, чтобы узнать книгу на
- * другом устройстве, и его тоже незачем считать на виду у читателя.
+ * другом устройстве.
+ *
+ * Разобранная книга остаётся здесь целиком, и картинки достаются отсюда же.
+ * Иначе за каждой картинкой пришлось бы разбирать книгу заново — и как раз в
+ * основном потоке, ради избавления от которого поток и заведён.
  *
  * Наружу уходят только простые данные: File и результат разбора переживают
- * передачу между потоками, а объект Book — нет.
+ * передачу между потоками, объект Book — нет.
  */
 
 import { Book } from "@fb2read/core";
@@ -25,38 +29,67 @@ export interface ParsedBook {
   repairs: string[];
 }
 
-export interface ParseRequest {
-  id: number;
-  file: File;
-}
+export type Request =
+  | { id: number; kind: "parse"; file: File }
+  | { id: number; kind: "image"; src: string };
 
-export type ParseReply =
-  | { id: number; ok: true; book: ParsedBook }
+/**
+ * Просьба без номера.
+ *
+ * Просто `Omit<Request, "id">` не годится: над объединением он оставляет только
+ * общие поля, и `file` с `src` пропадают. Здесь же снятие идёт по каждому виду
+ * просьбы отдельно.
+ */
+export type Ask<T = Request> = T extends { id: number } ? Omit<T, "id"> : never;
+
+export type Reply =
+  | { id: number; ok: true; kind: "parse"; book: ParsedBook }
+  | { id: number; ok: true; kind: "image"; image: Blob | null }
   | { id: number; ok: false; error: string };
 
-self.addEventListener("message", (event: MessageEvent<ParseRequest>) => {
-  const { id, file } = event.data;
-  void (async () => {
-    try {
-      const book = await Book.open(new BrowserFileSource(file));
-      const reply: ParseReply = {
-        id,
-        ok: true,
-        book: {
-          title: book.title,
-          author: book.author,
-          series: book.series,
-          format: book.format,
-          hash: book.hash,
-          blocks: book.blocks,
-          toc: book.toc,
-          repairs: book.repairs,
-        },
-      };
-      self.postMessage(reply);
-    } catch (e) {
-      // Ошибку нельзя передать как есть: между потоками ездят только данные.
-      self.postMessage({ id, ok: false, error: (e as Error).message } satisfies ParseReply);
-    }
-  })();
+/** Последняя разобранная книга: из неё и достаются картинки. */
+let current: Book | null = null;
+
+async function handle(request: Request): Promise<Reply> {
+  if (request.kind === "parse") {
+    const book = await Book.open(new BrowserFileSource(request.file));
+    current = book;
+    return {
+      id: request.id,
+      ok: true,
+      kind: "parse",
+      book: {
+        title: book.title,
+        author: book.author,
+        series: book.series,
+        format: book.format,
+        hash: book.hash,
+        blocks: book.blocks,
+        toc: book.toc,
+        repairs: book.repairs,
+      },
+    };
+  }
+
+  const image = current ? await current.imageData(request.src) : null;
+  return {
+    id: request.id,
+    ok: true,
+    kind: "image",
+    // Blob собирается здесь: он переживает передачу между потоками, и основному
+    // потоку остаётся только показать его, ничего не пересобирая.
+    // Приведение — из-за описания Uint8Array в ядре: он объявлен над
+    // ArrayBufferLike, куда формально входит и разделяемая память, которой тут
+    // взяться неоткуда.
+    image: image ? new Blob([image.data as BlobPart], { type: image.mime || "image/jpeg" }) : null,
+  };
+}
+
+self.addEventListener("message", (event: MessageEvent<Request>) => {
+  void handle(event.data).then(
+    (reply) => self.postMessage(reply),
+    // Ошибку нельзя передать как есть: между потоками ездят только данные.
+    (e: unknown) =>
+      self.postMessage({ id: event.data.id, ok: false, error: (e as Error).message } satisfies Reply),
+  );
 });

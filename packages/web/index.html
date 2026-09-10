@@ -8,6 +8,15 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <header id="bar" hidden>
+      <button type="button" id="close" title="Закрыть книгу">←</button>
+      <button type="button" id="toc-toggle">Оглавление</button>
+      <span id="progress"></span>
+      <button type="button" id="theme" title="Сменить тему">Тема</button>
+    </header>
+
+    <nav id="toc" hidden></nav>
+
     <main id="app">
       <section id="start">
         <h1>fb2read</h1>

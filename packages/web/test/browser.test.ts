@@ -135,6 +135,76 @@ async function openBook(page: Page, name = "Анна Каренина.fb2", byte
   await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
 }
 
+
+/** Однопиксельная PNG: для проверки картинок важно не изображение, а байты. */
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
+
+/**
+ * Длинная книга из двух частей.
+ *
+ * Короткая для проверки места не годится: она вся помещается на экран, и
+ * прокручивать в ней нечего. Здесь же абзацев столько, что сороковой лежит
+ * далеко за краем окна — как в настоящей книге.
+ */
+function longBook(withImage = false): Uint8Array {
+  const part = (title: string, from: number) =>
+    `<section><title><p>${title}</p></title>` +
+    Array.from({ length: 60 }, (_, i) => `<p>Абзац номер ${from + i}.</p>`).join("") +
+    "</section>";
+  const xml =
+    '<?xml version="1.0" encoding="utf-8"?>' +
+    '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" ' +
+    'xmlns:l="http://www.w3.org/1999/xlink">' +
+    "<description><title-info><book-title>Долгая книга</book-title>" +
+    "</title-info></description><body>" +
+    part("Часть первая", 1) +
+    part("Часть вторая", 61) +
+    (withImage ? '<section><p>Перед картинкой.</p><image l:href="#pic1"/></section>' : "") +
+    "</body>" +
+    (withImage ? `<binary id="pic1" content-type="image/png">${PNG_BASE64}</binary>` : "") +
+    "</FictionBook>";
+  return new TextEncoder().encode(xml);
+}
+
+/** Что записано в IndexedDB о месте в книге. */
+async function savedBlocks(page: Page): Promise<number[]> {
+  return page.evaluate(
+    () =>
+      new Promise<number[]>((resolve) => {
+        const request = indexedDB.open("fb2read");
+        request.onerror = () => resolve([]);
+        request.onsuccess = () => {
+          try {
+            const all = request.result.transaction("state", "readonly").objectStore("state").getAll();
+            all.onerror = () => resolve([]);
+            all.onsuccess = () =>
+              resolve((all.result as { block: number }[]).map((record) => record.block));
+          } catch {
+            // Хранилища ещё нет — значит, ничего и не записано.
+            resolve([]);
+          }
+        };
+      }),
+  );
+}
+
+/** Прокручивает к блоку так же, как это сделал бы читатель пальцем. */
+async function scrollToBlock(page: Page, block: number): Promise<void> {
+  await page.evaluate(
+    (n) => document.querySelector(`[data-block="${n}"]`)!.scrollIntoView({ block: "start" }),
+    block,
+  );
+}
+
+/** Где сейчас верх блока относительно окна. */
+function blockTop(page: Page, block: number): Promise<number> {
+  return page.evaluate(
+    (n) => document.querySelector(`[data-block="${n}"]`)!.getBoundingClientRect().top,
+    block,
+  );
+}
+
 // Без браузера проверять нечего; молча делать вид, что всё хорошо, — нельзя,
 // поэтому набор именно пропускается и это видно в отчёте.
 describe.skipIf(!CHROME)("читалка в браузере", () => {
@@ -226,6 +296,106 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     ).toBeUndefined();
     expect(await page.$("#book img")).toBeNull();
     expect(await page.textContent("#book")).toContain("<img src=x");
+    await page.close();
+  }, SLOW);
+
+  it("книга открывается там, где её бросили", async () => {
+    // Ради этого всё и затевалось: читалка, забывающая место, — не читалка.
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await scrollToBlock(page, 40);
+    await page.waitForFunction(
+      () => document.querySelector("#progress")!.textContent !== "",
+      undefined,
+      { timeout: 20_000 },
+    );
+    await expect.poll(() => savedBlocks(page), { timeout: 10_000 }).toEqual([40]);
+
+    await page.reload();
+    await give(page, "Долгая книга.fb2", longBook());
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+
+    // Не «примерно туда»: сороковой абзац стоит ровно у верхнего края.
+    expect(Math.abs(await blockTop(page, 40))).toBeLessThan(5);
+    await page.close();
+  }, SLOW);
+
+  it("уход со страницы записывает место немедленно", async () => {
+    // На iOS вкладку закрывают, не спрашивая, и ждать придержки нельзя.
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await scrollToBlock(page, 20);
+    await expect.poll(() => savedBlocks(page), { timeout: 10_000 }).toEqual([20]);
+
+    // Второе движение придержка откладывает почти на секунду.
+    const before = await page.textContent("#progress");
+    await scrollToBlock(page, 90);
+    // Сперва читалка должна заметить сам переход: слежение за экраном идёт
+    // кадрами, и без этого уходить со страницы было бы попросту не с чем.
+    await page.waitForFunction(
+      (was) => document.querySelector("#progress")!.textContent !== was,
+      before,
+      { timeout: 5000 },
+    );
+
+    await page.evaluate(() => {
+      Object.defineProperty(document, "visibilityState", { value: "hidden", configurable: true });
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+
+    // Срок нарочно короче придержки, и весь отрезок от записи двадцатого блока
+    // укладывается в неё же: дождаться таймера — не то же самое, что записать
+    // при уходе, и такую подмену эта проверка должна замечать.
+    await expect.poll(() => savedBlocks(page), { timeout: 400, interval: 25 }).toEqual([90]);
+    await page.close();
+  }, SLOW);
+
+  it("выбранная тема переживает перезагрузку", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await page.click("#theme");
+    const chosen = await page.getAttribute("html", "data-theme");
+    expect(chosen).toBe("night");
+
+    await page.reload();
+    await page.waitForFunction(
+      () => document.documentElement.getAttribute("data-theme") === "night",
+      undefined,
+      { timeout: 20_000 },
+    );
+    await page.close();
+  }, SLOW);
+
+  it("оглавление уносит в нужную главу", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await page.click("#toc-toggle");
+    const titles = await page.$$eval("#toc button", (nodes) => nodes.map((n) => n.textContent));
+    expect(titles).toEqual(["Часть первая", "Часть вторая"]);
+
+    await page.$$eval("#toc button", (nodes) => (nodes[1] as HTMLElement).click());
+    // Уйдя по строке, оглавление закрывается: читать сквозь него нельзя.
+    await page.waitForFunction(() => document.querySelector("#toc")!.hasAttribute("hidden"));
+    const top = await page.evaluate(() => {
+      const heads = [...document.querySelectorAll("#book h1, #book h2, #book h3")];
+      const second = heads.find((h) => h.textContent === "Часть вторая")!;
+      return second.getBoundingClientRect().top;
+    });
+    expect(Math.abs(top)).toBeLessThan(5);
+    await page.close();
+  }, SLOW);
+
+  it("картинка разворачивается только когда до неё дошли", async () => {
+    // Иначе книга с иллюстрациями съедала бы десятки мегабайт памяти ещё до
+    // того, как читатель увидел первую из них.
+    const page = await browser.newPage();
+    await openBook(page, "С картинкой.fb2", longBook(true));
+
+    const src = () => page.getAttribute("#book img", "src");
+    expect(await src()).toBeNull();
+
+    await page.evaluate(() => document.querySelector("#book img")!.scrollIntoView());
+    await expect.poll(src, { timeout: 10_000 }).toMatch(/^blob:/);
     await page.close();
   }, SLOW);
 });
