@@ -34,8 +34,9 @@ jobs:
       url: ${{ steps.deploy.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
+      # Версия не задаётся: она закреплена в package.json полем packageManager,
+      # и указывать её дважды action не позволяет.
       - uses: pnpm/action-setup@v4
-        with: { version: 10 }
       - uses: actions/setup-node@v4
         with:
           node-version: 22

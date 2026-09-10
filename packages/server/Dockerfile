@@ -16,7 +16,20 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.base.json ./
 COPY packages/core/package.json packages/core/
 COPY packages/cli/package.json packages/cli/
 COPY packages/server/package.json packages/server/
-RUN corepack enable && pnpm install --frozen-lockfile
+COPY packages/web/package.json packages/web/
+
+# Ставится только то, что нужно серверу: он сам, ядро и корень с tsup и tsc.
+#
+# Терминальная читалка сюда не попадает нарочно. За ней тянется node-pty,
+# который собирается из исходников, а в этом образе нет ни компилятора, ни
+# python — сборка обрывалась бы на нём, хотя серверу он не нужен вовсе.
+#
+# Версия pnpm закреплена в package.json: без этого corepack брал самый свежий,
+# а он читает настройки из другого места, и установка падала на разрешении
+# сборочных скриптов.
+ENV COREPACK_ENABLE_DOWNLOAD_PROMPT=0
+RUN corepack enable && pnpm install --frozen-lockfile \
+    --filter "fb2read-server..." --filter fb2read-monorepo
 
 COPY . .
 RUN pnpm --filter @fb2read/core exec tsc -b && pnpm --filter fb2read-server build
