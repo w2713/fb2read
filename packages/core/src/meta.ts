@@ -32,6 +32,24 @@ export function isBookName(name: string): boolean {
   return BOOK_SUFFIXES.some((suffix) => low.endsWith(suffix));
 }
 
+/**
+ * Дописывает расширение, если его нет, — по содержимому, а не по имени.
+ *
+ * Имя книги приезжает с того устройства, где её открыли, и расширения может
+ * не иметь вовсе: браузер отдаёт то имя, под которым файл лежит в системе, а
+ * скачанное из сети там нередко оказывается без расширения. Такой файл читалка
+ * откроет (формат она узнаёт по содержимому), но в списке каталога его не
+ * будет: список отбирает файлы по имени. Поэтому расширение восстанавливается
+ * при записи на диск, и берётся оно из самих байтов — имя в этот момент как
+ * раз и есть то, чему верить нельзя.
+ */
+export function nameWithExt(name: string, data: Uint8Array): string {
+  if (isBookName(name)) return name;
+  if (isEpubData(data)) return `${name}.epub`;
+  if (isZip(data)) return `${name}.fb2.zip`;
+  return `${name}.fb2`;
+}
+
 /** Автор и название из описания EPUB, без разбора всей книги. */
 export function epubMeta(archive: Uint8Array): QuickMeta {
   try {
