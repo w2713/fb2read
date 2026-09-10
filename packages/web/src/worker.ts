@@ -26,6 +26,8 @@ export interface ParsedBook {
   hash: string;
   blocks: Book["blocks"];
   toc: Book["toc"];
+  /** Якоря сносок: идентификатор цели — номер блока с примечанием. */
+  anchors: Book["anchors"];
   repairs: string[];
 }
 
@@ -66,6 +68,7 @@ async function handle(request: Request): Promise<Reply> {
         hash: book.hash,
         blocks: book.blocks,
         toc: book.toc,
+        anchors: book.anchors,
         repairs: book.repairs,
       },
     };

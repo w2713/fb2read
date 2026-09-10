@@ -8,14 +8,48 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
-    <header id="bar" hidden>
-      <button type="button" id="close" title="Закрыть книгу">←</button>
-      <button type="button" id="toc-toggle">Оглавление</button>
-      <span id="progress"></span>
-      <button type="button" id="theme" title="Сменить тему">Тема</button>
-    </header>
+    <!-- Панель и списки — один прилипающий блок: порознь они наезжали друг на
+         друга, стоило кнопкам перенестись на вторую строку. -->
+    <div id="top">
+      <header id="bar" hidden>
+        <button type="button" id="close" title="Закрыть книгу" aria-label="Закрыть книгу">
+          ←
+        </button>
+        <button type="button" id="toc-toggle">Оглавление</button>
+        <button type="button" id="find-toggle">Поиск</button>
+        <button type="button" id="marks-toggle">Закладки</button>
+        <button type="button" id="mark" title="Поставить закладку" aria-label="Поставить закладку">
+          ☆
+        </button>
+        <!-- Появляется только после перехода по сноске: возвращаться иначе некуда. -->
+        <button type="button" id="back" title="Вернуться из сноски" hidden>Назад</button>
+        <span id="progress"></span>
+        <button type="button" id="theme" title="Сменить тему" aria-label="Сменить тему">
+          Тема
+        </button>
+      </header>
 
-    <nav id="toc" hidden></nav>
+      <div id="panel" hidden>
+        <nav id="toc" hidden></nav>
+
+        <section id="find" hidden>
+          <form id="find-form">
+            <input id="q" type="search" placeholder="Найти в книге" autocomplete="off" />
+            <button type="submit">Искать</button>
+            <button type="button" id="find-prev" title="Предыдущее совпадение">←</button>
+            <button type="button" id="find-next" title="Следующее совпадение">→</button>
+          </form>
+          <p id="find-count" class="note-line"></p>
+          <ul id="found"></ul>
+        </section>
+
+        <section id="marks" hidden>
+          <p id="marks-empty" class="note-line" hidden>Закладок пока нет.</p>
+          <ul id="mark-list"></ul>
+          <button type="button" id="marks-export">Выгрузить в markdown</button>
+        </section>
+      </div>
+    </div>
 
     <main id="app">
       <section id="start">
