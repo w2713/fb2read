@@ -185,6 +185,44 @@ describe("книги на полке", () => {
     expect(await store.loadBookmarks(КНИГА)).toHaveLength(1);
   });
 
+  it("снятая книга запоминается снятой", async () => {
+    // Ради этого список и заведён: без отметки обмен видит, что книги нет, и
+    // добросовестно скачивает её обратно — «убрать» не работает вовсе.
+    await store.putBook(описание(КНИГА), байты("это книга"));
+    expect(await store.dropped()).toEqual(new Set());
+
+    await store.dropBook(КНИГА);
+    expect(await store.dropped()).toEqual(new Set([КНИГА]));
+  });
+
+  it("отметка о снятии переживает переоткрытие базы", async () => {
+    // Иначе она пропадала бы при каждом запуске, а книга возвращалась.
+    const name = `снятая-${++counter}`;
+    const before = new IdbStore(name);
+    await before.putBook(описание(КНИГА), байты("это книга"));
+    await before.dropBook(КНИГА);
+    await before.close();
+
+    const after = new IdbStore(name);
+    expect(await after.dropped()).toEqual(new Set([КНИГА]));
+    await after.close();
+  });
+
+  it("возврат книги снимает отметку", async () => {
+    await store.putBook(описание(КНИГА), байты("это книга"));
+    await store.dropBook(КНИГА);
+    await store.undrop(КНИГА);
+    expect(await store.dropped()).toEqual(new Set());
+  });
+
+  it("снятие одной книги не трогает другие", async () => {
+    await store.putBook(описание(КНИГА), байты("раз"));
+    await store.putBook(описание(ДРУГАЯ), байты("два"));
+    await store.dropBook(КНИГА);
+    expect(await store.dropped()).toEqual(new Set([КНИГА]));
+    expect(await store.bookMeta(ДРУГАЯ)).not.toBeNull();
+  });
+
   it("полка отдаёт книги вместе с их местами", async () => {
     await store.putBook(описание(КНИГА), байты("раз"));
     await store.putBook(описание(ДРУГАЯ), байты("два"));

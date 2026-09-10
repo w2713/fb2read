@@ -10,10 +10,10 @@ import { parseArgs } from "node:util";
 import { IMAGE_BACKENDS, THEME_ORDER, type ImageBackend, type Theme } from "@fb2read/core";
 
 export const APP = "fb2read";
-export const VERSION = "0.17.0";
+export const VERSION = "0.18.0";
 
 /** Команды синхронизации: первое слово, а не ключ. */
-export const COMMANDS = ["sync", "push", "pull", "remote"] as const;
+export const COMMANDS = ["sync", "push", "pull", "remote", "forget"] as const;
 export type Command = (typeof COMMANDS)[number];
 
 /** Что разобрали из командной строки. */
@@ -58,6 +58,8 @@ export const HELP = `${APP} ${VERSION}
                         всю библиотеку
   pull ЧТО | --all      скачать книгу с сервера в каталог библиотеки
   remote                показать книги на сервере с прогрессом
+  forget ЧТО            удалить книгу с сервера: она исчезнет на всех
+                        устройствах
 
 Ключи:
   -w, --width N         ширина текстовой колонки (по умолчанию 80)

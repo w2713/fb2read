@@ -98,6 +98,65 @@ export function client(settings: SyncSettings, timeoutMs: number): SyncClient {
 }
 
 /**
+ * Забирает с сервера одну книгу и возвращает её на полку.
+ *
+ * Нужна тому, кто убрал книгу с устройства, а потом передумал: снятая книга
+ * остаётся видна облаком, и это единственный способ вернуть её обратно.
+ */
+export async function fetchBook(
+  store: IdbStore,
+  settings: SyncSettings,
+  hash: string,
+): Promise<string> {
+  try {
+    const api = client(settings, 120_000);
+    const there = (await api.list()).find((book) => book.hash === hash);
+    if (!there) {
+      // Книгу могли удалить с сервера с другого устройства. Держать облако,
+      // за которым ничего нет, — обманывать читателя.
+      await store.undrop(hash);
+      return "книги на сервере больше нет";
+    }
+    const bytes = await api.download(hash);
+    await store.putBook(
+      {
+        hash,
+        name: there.name,
+        title: there.title,
+        author: there.author,
+        size: bytes.length,
+        addedAt: Date.now() / 1000,
+      },
+      new Blob([bytes as unknown as BlobPart]),
+    );
+    await store.undrop(hash);
+    return `вернулась: ${there.title || there.name}`;
+  } catch (e) {
+    return `не вышло: ${e instanceof SyncError ? e.message : (e as Error).message}`;
+  }
+}
+
+/**
+ * Удаляет книгу с сервера — вместе с местом и закладками.
+ *
+ * Отдельно от «убрать с устройства» намеренно: одно освобождает место на
+ * телефоне, другое отбирает книгу у всех устройств сразу.
+ */
+export async function forgetBook(
+  store: IdbStore,
+  settings: SyncSettings,
+  hash: string,
+): Promise<string> {
+  try {
+    await client(settings, 60_000).remove(hash);
+    await store.undrop(hash);
+    return "удалена с сервера";
+  } catch (e) {
+    return `не вышло: ${e instanceof SyncError ? e.message : (e as Error).message}`;
+  }
+}
+
+/**
  * Полный обмен: книги в обе стороны и места по всем книгам.
  *
  * Книги отправляются и забираются раньше мест: место без книги читателю
@@ -124,9 +183,13 @@ export async function exchange(store: IdbStore, settings: SyncSettings): Promise
       sent += 1;
     }
 
+    // Снятые с полки книги не скачиваются заново. Иначе «убрать» не работает
+    // вовсе: обмен видит, что книги нет, и добросовестно возвращает её.
+    const dropped = await store.dropped();
+
     let taken = 0;
     for (const book of remote) {
-      if (here.has(book.hash)) continue;
+      if (here.has(book.hash) || dropped.has(book.hash)) continue;
       const bytes = await api.download(book.hash);
       await store.putBook(
         {
