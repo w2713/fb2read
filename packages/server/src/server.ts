@@ -9,7 +9,7 @@
  */
 
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { SKEW_LIMIT, sha256Hex, type SyncState } from "@fb2read/core";
+import { SKEW_LIMIT, nameWithExt, sha256Hex, type SyncState } from "@fb2read/core";
 import { Storage, isHash, safeExt, type BookEntry } from "./storage.js";
 
 /** Настройки сервера. */
@@ -274,7 +274,7 @@ export function createHandler(options: ServerOptions) {
     const header = request.headers["x-name"];
     // Имя приезжает процентным кодированием: в заголовке допустима латиница,
     // а книги называются по-русски.
-    let name = "книга.fb2";
+    let name = "книга";
     if (typeof header === "string" && header) {
       try {
         name = decodeURIComponent(header);
@@ -282,6 +282,12 @@ export function createHandler(options: ServerOptions) {
         name = header;
       }
     }
+    // Расширение дописывается по содержимому: имя пришло с чужого устройства,
+    // и расширения в нём может не быть вовсе. Без него книга, скачанная на
+    // другую машину, ляжет на диск файлом без расширения — читалка такой
+    // откроет, узнав формат по байтам, но в списке каталога его не будет:
+    // список отбирает файлы по имени.
+    name = nameWithExt(name, data);
 
     const previous = await storage.book(user, hash);
     const entry: BookEntry = {

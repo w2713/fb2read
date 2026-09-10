@@ -32,7 +32,7 @@ export type { Prefs, SyncPrefs, Theme, ImageBackend, ConfigResult, Ini } from ".
 export { bookKey, progressPercent, plural } from "./state.js";
 export type { StateStore, PositionRecord, Bookmark, RecentEntry, Settings } from "./state.js";
 export { bookmarkLabel, bookmarksMarkdown, bookmarksFileName } from "./bookmarks.js";
-export { quickMeta, epubMeta, isBookName, BOOK_SUFFIXES } from "./meta.js";
+export { quickMeta, epubMeta, isBookName, nameWithExt, BOOK_SUFFIXES } from "./meta.js";
 export {
   mergePosition,
   mergeBookmarks,

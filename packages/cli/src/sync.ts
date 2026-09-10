@@ -18,6 +18,7 @@ import {
   SyncError,
   bookKey,
   mergeState,
+  nameWithExt,
   progressPercent,
   quickMeta,
   sha256Hex,
@@ -234,7 +235,7 @@ export async function cmdPull(
   for (const book of wanted) {
     try {
       const data = await client.download(book.hash);
-      const path = join(dir, safeFileName(book.name));
+      const path = join(dir, nameWithExt(safeFileName(book.name), data));
       writeFileSync(path, data);
       out(`${book.name} → ${path}`);
       await restorePosition(client, store, path, data, book.hash);
@@ -286,6 +287,9 @@ async function restorePosition(
  * Убирается ровно опасное: разделители пути, ведущие точки и то, что
  * запрещает Windows. Пробелы, дефисы и кириллица остаются — «Война и
  * мир.fb2» должна остаться собой, а не превратиться в «Войнаимир.fb2».
+ *
+ * Расширения здесь не касаемся: его дописывает nameWithExt, которому видны
+ * байты книги.
  */
 export function safeFileName(name: string): string {
   const cleaned = name
@@ -376,7 +380,7 @@ export async function downloadBook(
   const data = await client.download(hash);
   const dir = libraryDir();
   mkdirSync(dir, { recursive: true });
-  const path = join(dir, safeFileName(name));
+  const path = join(dir, nameWithExt(safeFileName(name), data));
   writeFileSync(path, data);
   await applyRemoteState(client, store, path, data, hash);
   return path;

@@ -8,7 +8,7 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -156,5 +156,75 @@ describe("каталог для скачанных книг", () => {
       if (было === undefined) delete process.env["FB2READ_LIBRARY"];
       else process.env["FB2READ_LIBRARY"] = было;
     }
+  });
+});
+
+describe("скачивание книги", () => {
+  const книга = new TextEncoder().encode(
+    '<?xml version="1.0" encoding="utf-8"?><FictionBook><description><title-info>' +
+      "<book-title>Война и мир</book-title></title-info></description>" +
+      "<body><section><p>Текст.</p></section></body></FictionBook>",
+  );
+
+  /** Сервер ровно на те три пути, которые спрашивает pull. */
+  function raise(имя: string): Promise<{ url: string; close: () => Promise<void> }> {
+    const s = createServer((request, response) => {
+      const path = (request.url ?? "").split("?")[0];
+      if (path === "/api/v1/books") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            books: [
+              { hash: HASH, name: имя, size: книга.length, title: "Война и мир", author: "Толстой", updatedAt: 1 },
+            ],
+          }),
+        );
+        return;
+      }
+      if (path === `/api/v1/books/${HASH}`) {
+        response.writeHead(200, { "Content-Type": "application/octet-stream" });
+        response.end(Buffer.from(книга));
+        return;
+      }
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(JSON.stringify({ states: [] }));
+    });
+    return new Promise((done) => {
+      s.listen(0, "127.0.0.1", () =>
+        done({
+          url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`,
+          close: () => new Promise<void>((r) => s.close(() => r())),
+        }),
+      );
+    });
+  }
+
+  async function pull(имя: string): Promise<string[]> {
+    const { cmdPull } = await import("../src/sync.js");
+    const lib = mkdtempSync(join(tmpdir(), "fb2read-lib-"));
+    const было = process.env["FB2READ_LIBRARY"];
+    process.env["FB2READ_LIBRARY"] = lib;
+    const сервер = await raise(имя);
+    try {
+      expect(await cmdPull({ url: сервер.url, token: "proba-token" }, undefined, true, store())).toBe(0);
+      return readdirSync(lib);
+    } finally {
+      await сервер.close();
+      if (было === undefined) delete process.env["FB2READ_LIBRARY"];
+      else process.env["FB2READ_LIBRARY"] = было;
+      rmSync(lib, { recursive: true, force: true });
+    }
+  }
+
+  it("дописывает расширение имени, пришедшему без него", async () => {
+    // Имя приходит с того устройства, где книгу открыли, и расширения может
+    // не иметь: браузер отдаёт имя файла как есть, а скачанное из сети лежит
+    // в системе нередко без расширения. Такой файл читалка откроет, но в
+    // списке каталога его не будет — список отбирает файлы по имени.
+    expect(await pull("Война и мир")).toEqual(["Война и мир.fb2"]);
+  });
+
+  it("имя с расширением оставляет как есть", async () => {
+    expect(await pull("Война и мир.fb2")).toEqual(["Война и мир.fb2"]);
   });
 });
