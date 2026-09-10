@@ -48,6 +48,8 @@ const TYPES: Record<string, string> = {
 let browser: Browser;
 let server: Server;
 let base: string;
+/** Метка, подмешиваемая в страницу: по ней видно, из сети она или из кэша. */
+let mark = "";
 
 const BOOK =
   '<?xml version="1.0" encoding="utf-8"?>' +
@@ -68,6 +70,9 @@ beforeAll(async () => {
       response.writeHead(404);
       response.end();
       return;
+    }
+    if (mark && file.endsWith("index.html")) {
+      body = Buffer.from(body.toString("utf-8").replace("</body>", `<p id="метка">${mark}</p></body>`));
     }
     response.writeHead(200, { "Content-Type": TYPES[extname(file)] ?? "application/octet-stream" });
     response.end(body);
@@ -177,6 +182,27 @@ describe.skipIf(!CHROME)("читалка без сети", () => {
       return out;
     });
     expect(icons).toEqual([200, 200, 200]);
+    await page.close();
+  }, SLOW);
+
+  it("свежая страница доходит до читателя, а не берётся из кэша", async () => {
+    // Ровно это однажды и случилось: правка выложена, а на телефоне читалка
+    // вчерашняя, и деться от этого было некуда. Страница с сетью должна
+    // браться из сети — иначе выкладывать правки бессмысленно.
+    const page = await browser.newPage();
+    await page.goto(base);
+    await page.waitForFunction(() => navigator.serviceWorker.controller !== null, undefined, {
+      timeout: 20_000,
+    });
+
+    mark = "новая выкладка";
+    try {
+      await page.reload();
+      await page.waitForSelector("#метка", { timeout: 10_000 });
+      expect(await page.textContent("#метка")).toBe("новая выкладка");
+    } finally {
+      mark = "";
+    }
     await page.close();
   }, SLOW);
 });
