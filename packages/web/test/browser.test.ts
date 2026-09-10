@@ -667,6 +667,23 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     expect(await page.$("#book .marked")).toBeNull();
     await page.close();
   }, SLOW);
+  it("выбор файла ничем не ограничен", async () => {
+    // Список расширений в поле выбора ломает iOS: он сопоставляет их со своими
+    // типами файлов, а .fb2 и .fbz ему незнакомы — книги показывались в
+    // «Файлах» серыми, и открыть их было нельзя вовсе. Проверка на месте,
+    // чтобы список не вернулся: здесь, в Chromium, он не мешает ничему, и
+    // заметить поломку было бы негде.
+    const page = await browser.newPage();
+    await page.goto(base);
+    expect(await page.getAttribute("#file", "accept")).toBeNull();
+
+    // И чужой файл по-прежнему объясняется, а не открывается.
+    await give(page, "не книга.txt", new TextEncoder().encode("это вообще не книга"));
+    await page.waitForSelector(".failure", { timeout: 20_000 });
+    expect(await page.textContent(".failure")).toContain("не книга.txt");
+    await page.close();
+  }, SLOW);
+
   it("панель чтения не висит над библиотекой", async () => {
     // Атрибут hidden сам по себе ничего не прячет, если у элемента задан свой
     // display: браузерное правило слабее любого нашего. Проверяется поэтому не
