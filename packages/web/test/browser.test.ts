@@ -104,7 +104,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}/fb2read/app/`;
 
-  browser = await chromium.launch({ executablePath: CHROME! });
+  if (CHROME) browser = await chromium.launch({ executablePath: CHROME });
 }, 120_000);
 
 afterAll(async () => {

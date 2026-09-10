@@ -123,7 +123,7 @@ beforeAll(async () => {
     sync.on("exit", (code) => fail(new Error(`сервер вышел с кодом ${code}`)));
   });
 
-  browser = await chromium.launch({ executablePath: CHROME! });
+  if (CHROME) browser = await chromium.launch({ executablePath: CHROME });
 }, 120_000);
 
 afterAll(async () => {
