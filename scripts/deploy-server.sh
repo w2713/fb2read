@@ -1,41 +1,34 @@
 #!/bin/sh
-# Обновляет сервер синхронизации на месте, в Docker.
+# Обновляет сервер синхронизации, поднятый через docker compose.
 #
-# Руками это пять команд, и дважды из-за них сервер ложился. Первый раз —
-# потому что настройки работающего контейнера писались заново по примеру из
-# README, и в них потерялся FB2READ_SERVER_ORIGIN: браузер получал отказ по
-# CORS, а читалка показывала «сервер недоступен». Второй — потому что в команду
-# ушла подстановка «ВАШ-ТОКЕН» как есть, а сервер не принимает токен не из
-# латиницы и уходит в перезапуск по кругу.
+# Само обновление — это две команды, `git pull` и `docker compose up -d
+# --build`, и скрипт их не заменяет, а обкладывает тем, чего compose не делает.
+# А не делает он ровно того, на чём этот сервер уже дважды ложился:
 #
-# Поэтому скрипт ничего не сочиняет: настройки он снимает с работающего
-# контейнера и переносит как есть. Что можно проверить до того, как трогать
-# работающее, — проверяется до; прежний контейнер сносится только после того,
-# как новый ответил, а если не ответил — возвращается назад.
+#  * не смотрит в токен. Токен без имени впереди («токен» вместо «я:токен»)
+#    compose проглотит молча, сервер поднимется пользователем default — и
+#    читатель увидит пустую библиотеку, потому что книги лежат в каталоге с
+#    другим именем. Токен не из латиницы сервер не примет вовсе и уйдёт в
+#    перезапуск по кругу;
+#  * не смотрит, тот ли том подцепился. Том из раздела volumes без пометки
+#    external compose называет по имени проекта и заводит новый, пустой. Со
+#    стороны это неотличимо от «книги пропали»;
+#  * не откатывает. Если новый контейнер не поднялся, compose оставит его
+#    перезапускаться, а прежний образ к тому времени уже перезаписан.
 #
 # Запуск на сервере, из каталога репозитория:
 #
 #   ./scripts/deploy-server.sh            # обновить до main
 #   ./scripts/deploy-server.sh v0.21.0    # обновить до тега
 #
-# Первый раз, когда контейнера ещё нет, токен задаётся окружением:
-#
-#   FB2READ_SERVER_TOKENS="я:$(openssl rand -hex 32)" \
-#   FB2READ_SERVER_ORIGIN=https://w2713.github.io \
-#     ./scripts/deploy-server.sh
-#
-# Так же задаётся и новое значение, когда что-то надо поменять: заданное
-# окружением важнее того, что стояло в контейнере.
+# Настройки берутся из compose-файла, а токен — из .env рядом с ним. Ничего
+# перенимать с работающего контейнера не нужно: всё написано в файле.
 
 set -eu
 
-NAME=${FB2READ_CONTAINER:-fb2read}
-IMAGE=${FB2READ_IMAGE:-fb2read-server}
-DATA_DEFAULT=${FB2READ_VOLUME:-fb2read-data}
-PORT_DEFAULT=${FB2READ_PUBLISH:-8787:8787}
 REF=${1:-main}
-OLD="$NAME-old"
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
+FILE=${FB2READ_COMPOSE:-}
 
 say() {
     printf '%s\n' "$*"
@@ -46,84 +39,69 @@ fail() {
     exit 1
 }
 
-command -v docker >/dev/null 2>&1 || fail "нет docker"
-command -v git >/dev/null 2>&1 || fail "нет git"
-[ -f "$ROOT/packages/server/Dockerfile" ] || fail "это не каталог репозитория fb2read"
+command -v docker > /dev/null 2>&1 || fail "нет docker"
+command -v git > /dev/null 2>&1 || fail "нет git"
+docker compose version > /dev/null 2>&1 || fail "нет docker compose"
 
-# Настройки лежат в файле, а не в -e: значение переменной из командной строки
-# видно в списке процессов любому на этой машине, а там токен.
-ENVFILE=$(mktemp)
-chmod 600 "$ENVFILE"
-cleanup() {
-    rm -f "$ENVFILE" "$ENVFILE.new"
-}
-trap cleanup EXIT INT TERM
-
-# --- что стоит сейчас -------------------------------------------------------
-
-HAVE=$(docker ps -a --filter "name=^${NAME}$" --format '{{.ID}}' 2>/dev/null || true)
-
-look() {
-    docker inspect "$NAME" --format "$1" 2>/dev/null || true
-}
-
-if [ -n "$HAVE" ]; then
-    say "перенимаю настройки работающего контейнера $NAME"
-    # Первая привязка порта и том, примонтированный на /data. Нескольких у
-    # этого сервера не бывает: он слушает один порт и хранит всё в одном месте.
-    # $p и $c здесь — не переменные оболочки, а имена в шаблоне docker inspect,
-    # и раскрывать их должен он, а не мы.
-    # shellcheck disable=SC2016
-    PUBLISH=$(look '{{range $p, $c := .HostConfig.PortBindings}}{{range $c}}{{.HostIp}}:{{.HostPort}}:{{$p}}
-{{end}}{{end}}' | sed -e 's|/tcp$||' -e 's|^:||' | head -1)
-    DATA=$(look '{{range .Mounts}}{{if eq .Destination "/data"}}{{if .Name}}{{.Name}}{{else}}{{.Source}}{{end}}{{end}}{{end}}')
-    look '{{range .Config.Env}}{{println .}}{{end}}' | grep '^FB2READ_SERVER_' > "$ENVFILE" || true
-else
-    say "контейнера $NAME нет — запускаю впервые"
-    PUBLISH=""
-    DATA=""
+if [ -z "$FILE" ]; then
+    for name in docker-compose.yml docker-compose.yaml compose.yml compose.yaml; do
+        [ -f "$ROOT/$name" ] || continue
+        FILE=$ROOT/$name
+        break
+    done
 fi
+[ -n "$FILE" ] || fail "рядом нет compose-файла — см. README, раздел «Свой сервер»"
 
-[ -n "$PUBLISH" ] || PUBLISH=$PORT_DEFAULT
-[ -n "$DATA" ] || DATA=$DATA_DEFAULT
-
-# --- что попросили поменять -------------------------------------------------
-
-override() {
-    [ -n "$2" ] || return 0
-    grep -v "^$1=" "$ENVFILE" > "$ENVFILE.new" || true
-    mv "$ENVFILE.new" "$ENVFILE"
-    printf '%s=%s\n' "$1" "$2" >> "$ENVFILE"
+compose() {
+    docker compose -f "$FILE" "$@"
 }
-
-override FB2READ_SERVER_TOKENS "${FB2READ_SERVER_TOKENS:-}"
-override FB2READ_SERVER_ORIGIN "${FB2READ_SERVER_ORIGIN:-}"
-override FB2READ_SERVER_MAX_MB "${FB2READ_SERVER_MAX_MB:-}"
 
 # --- проверки до того, как трогать работающее -------------------------------
 
-grep -q '^FB2READ_SERVER_TOKENS=.' "$ENVFILE" ||
-    fail "нет токенов: задайте FB2READ_SERVER_TOKENS=\"имя:\$(openssl rand -hex 32)\""
+# Заодно проверяется и сам файл, и что .env с токеном на месте: без него
+# ${FB2READ_SERVER_TOKENS:?...} остановит compose прямо здесь.
+compose config > /dev/null 2>&1 || {
+    compose config > /dev/null || true
+    fail "compose-файл не сходится — исправьте его прежде, чем обновлять"
+}
 
-TOKENS=$(grep '^FB2READ_SERVER_TOKENS=' "$ENVFILE" | cut -d= -f2-)
+SERVICE=$(compose config --services | head -1)
+[ -n "$SERVICE" ] || fail "в compose-файле нет ни одной службы"
+
+# Значение токена нигде не печатается: из вывода берётся только оно само, и
+# дальше о нём говорится «есть имя» или «одна латиница».
+TOKENS=$(compose config | sed -n 's/^ *FB2READ_SERVER_TOKENS: *//p' | head -1 | sed -e 's/^"//' -e 's/"$//')
+[ -n "$TOKENS" ] || fail "в настройках нет FB2READ_SERVER_TOKENS"
+
 case $TOKENS in
     *[!\ -~]*)
         fail "в токене не латиница — сервер такой не примет.
-Похоже, подстановку вроде «ВАШ-ТОКЕН» скопировали в команду как есть."
+Похоже, подстановку вроде «ВАШ-ТОКЕН» скопировали в файл как есть."
         ;;
 esac
 
-grep -q '^FB2READ_SERVER_ORIGIN=.' "$ENVFILE" ||
-    say "внимание: FB2READ_SERVER_ORIGIN не задан — браузерная читалка получит отказ по CORS"
+USER_NAME=${TOKENS%%:*}
+case $TOKENS in
+    *:*) ;;
+    *)
+        fail "в токене нет имени пользователя: надо «имя:токен», а не просто токен.
+Без имени сервер поднимется пользователем default, и библиотека окажется пустой."
+        ;;
+esac
+[ -n "$USER_NAME" ] || fail "перед двоеточием в токене пусто — там должно быть имя пользователя"
 
-# Только правленые файлы репозитория: лишние файлы рядом сборке не мешают, а
-# git checkout о них не спотыкается. Раньше проверялось и то и другое, и
-# деплой вставал из-за какого-нибудь забытого рядом файла — причём молча, не
-# показывая, из-за какого именно.
 DIRTY=$(git -C "$ROOT" status --porcelain --untracked-files=no)
 if [ -n "$DIRTY" ]; then
     printf 'в каталоге есть правленые файлы репозитория:\n%s\n' "$DIRTY" >&2
     fail "верните их как было (git restore .) или сохраните, иначе обновление их затрёт"
+fi
+
+# --- что стоит сейчас -------------------------------------------------------
+
+IMAGE=$(compose config | sed -n 's/^ *image: *//p' | head -1)
+PREV=""
+if [ -n "$IMAGE" ]; then
+    PREV=$(docker image inspect "$IMAGE" --format '{{.Id}}' 2>/dev/null || true)
 fi
 
 # --- сборка -----------------------------------------------------------------
@@ -137,53 +115,59 @@ if git -C "$ROOT" symbolic-ref -q HEAD > /dev/null; then
 fi
 say "собран будет $(git -C "$ROOT" log --oneline -1)"
 
-# Новый образ отдельным именем: неудачная сборка не должна портить то, чем
-# сервер работает сейчас.
-docker build -q -f "$ROOT/packages/server/Dockerfile" -t "$IMAGE:new" "$ROOT" > /dev/null ||
-    fail "сборка образа не прошла — работающий контейнер не тронут"
-
-# --- подмена ----------------------------------------------------------------
-
-PORT=$(grep '^FB2READ_SERVER_PORT=' "$ENVFILE" | cut -d= -f2- || true)
-[ -n "$PORT" ] || PORT=8787
-
-if [ -n "$HAVE" ]; then
-    docker rename "$NAME" "$OLD"
-    docker stop "$OLD" > /dev/null
-fi
-
-set -- -p "$PUBLISH" -v "$DATA:/data" --env-file "$ENVFILE"
-docker run -d --name "$NAME" --restart unless-stopped "$@" "$IMAGE:new" > /dev/null
+compose build --quiet || fail "сборка образа не прошла — работающий контейнер не тронут"
+compose up -d
 
 # --- ответил ли -------------------------------------------------------------
 
-ALIVE=""
+PORT=$(compose config | sed -n 's/^ *FB2READ_SERVER_PORT: *//p' | head -1 | tr -d '"')
+[ -n "$PORT" ] || PORT=8787
+
+alive() {
+    compose exec -T "$SERVICE" wget -q -O- "http://127.0.0.1:$PORT/api/v1/health" > /dev/null 2>&1
+}
+
+back() {
+    say "возвращаю прежний сервер"
+    if [ -n "$PREV" ] && [ -n "$IMAGE" ]; then
+        docker tag "$PREV" "$IMAGE"
+        compose up -d
+    else
+        compose down > /dev/null 2>&1 || true
+    fi
+}
+
+OK=""
 TRY=0
 while [ "$TRY" -lt 30 ]; do
-    if docker exec "$NAME" wget -q -O- "http://127.0.0.1:$PORT/api/v1/health" > /dev/null 2>&1; then
-        ALIVE=yes
+    if alive; then
+        OK=yes
         break
     fi
     TRY=$((TRY + 1))
     sleep 1
 done
 
-if [ -z "$ALIVE" ]; then
+if [ -z "$OK" ]; then
     say "новый контейнер не отвечает, вот что он говорит:"
-    docker logs --tail 20 "$NAME" >&2 || true
-    docker rm -f "$NAME" > /dev/null
-    if [ -n "$HAVE" ]; then
-        docker rename "$OLD" "$NAME"
-        docker start "$NAME" > /dev/null
-        fail "обновление откачено, прежний сервер поднят обратно"
-    fi
-    fail "сервер не поднялся"
+    compose logs --tail 20 "$SERVICE" >&2 || true
+    back
+    fail "обновление откачено"
 fi
 
-docker tag "$IMAGE:new" "$IMAGE:latest"
-if [ -n "$HAVE" ]; then
-    docker rm "$OLD" > /dev/null
+# --- та ли библиотека -------------------------------------------------------
+
+# Книги лежат в каталоге по имени пользователя. Если каталоги есть, а нужного
+# среди них нет — значит, подцепился не тот том или у токена другое имя, и
+# читатель увидит пустую полку. Пустой /data — дело другое: это новый сервер,
+# каталог заводится при первой записи.
+SEEN=$(compose exec -T "$SERVICE" ls /data 2>/dev/null | tr -d '\r' || true)
+if [ -n "$SEEN" ] && ! printf '%s\n' "$SEEN" | grep -qx "$USER_NAME"; then
+    printf 'в /data лежат каталоги других пользователей:\n%s\n' "$SEEN" >&2
+    say "а нужен «$USER_NAME» — значит, подцепился не тот том или в токене другое имя"
+    back
+    fail "обновление откачено: библиотека оказалась бы пустой"
 fi
 
-say "готово: $(docker exec "$NAME" node /app/fb2read-server.mjs --version)"
-say "проверка: $(docker exec "$NAME" wget -q -O- "http://127.0.0.1:$PORT/api/v1/health")"
+say "готово: $(compose exec -T "$SERVICE" node /app/fb2read-server.mjs --version | tr -d '\r')"
+say "проверка: $(compose exec -T "$SERVICE" wget -q -O- "http://127.0.0.1:$PORT/api/v1/health")"
