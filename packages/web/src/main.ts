@@ -23,6 +23,7 @@ import {
 import { IdbStore, type BookMeta } from "./db.js";
 import { firstFrom, step } from "./find.js";
 import { DEFAULT_TEXT, atEdge, stepSize, textSize } from "./look.js";
+import { fitsSpread, pageAt, pageCount, pageLeft, pageStep, stepPage } from "./spread.js";
 import { marked, removeMark, sortedMarks, toggleMark } from "./marks.js";
 import { holdPlace, type Holder } from "./hold.js";
 import { keepPosition, searchTop, type Keeper } from "./position.js";
@@ -57,6 +58,7 @@ const backButton = document.querySelector<HTMLButtonElement>("#back")!;
 const progressLabel = document.querySelector<HTMLElement>("#progress")!;
 const smaller = document.querySelector<HTMLButtonElement>("#smaller")!;
 const bigger = document.querySelector<HTMLButtonElement>("#bigger")!;
+const spreadButton = document.querySelector<HTMLButtonElement>("#spread")!;
 const shelf = document.querySelector<HTMLElement>("#shelf")!;
 const greeting = document.querySelector<HTMLElement>("#greeting")!;
 const storageLine = document.querySelector<HTMLElement>("#storage")!;
@@ -119,7 +121,17 @@ const shown = new Map<string, string>();
 
 /** Закрывает предыдущую книгу: наблюдатели и адреса не должны накапливаться. */
 async function closeOpen(): Promise<void> {
-  if (scrolled) window.removeEventListener("scroll", scrolled);
+  // Разворот снимается первым делом и до всякого ожидания: его правила задают
+  // ширину всей страницы, и на первом экране полка разъехалась бы во всю ширину
+  // разворота. Дальше в этой же работе идёт запись места, а она асинхронна —
+  // экран к тому времени уже переключён. Выбор читателя при этом остаётся:
+  // следующая книга откроется разворотом.
+  document.body.classList.remove("spread");
+  listenWheel(false);
+  if (scrolled) {
+    window.removeEventListener("scroll", scrolled);
+    article.removeEventListener("scroll", scrolled);
+  }
   scrolled = null;
   images?.disconnect();
   images = null;
@@ -156,7 +168,14 @@ function watchPosition(keeper: Keeper): void {
     pending = true;
     requestAnimationFrame(() => {
       pending = false;
-      const now = blockAtTop();
+      // Переход читалки главнее того, что видно на странице, — но только один
+      // раз, до первого движения читателя. Почему: в развороте страница
+      // начинается не с того абзаца, к которому перешли, а с того, что попал в
+      // её левый верх. Без этого правила переход к сороковому абзацу тут же
+      // записывался бы девятнадцатым — началом страницы, — и два переключения
+      // режима уводили читателя на сорок абзацев назад. Поймано проверкой.
+      const now = jumped ?? blockAtTop();
+      jumped = null;
       if (now === null) return;
       keeper.moved(now);
       showProgress(now);
@@ -166,6 +185,9 @@ function watchPosition(keeper: Keeper): void {
   // passive: обработчик не отменяет прокрутку, и браузеру не надо ждать его,
   // чтобы прокрутить страницу. На телефоне без этого листание дёргается.
   window.addEventListener("scroll", scrolled, { passive: true });
+  // В развороте прокручивается книга, а не окно: события приходят от неё, и
+  // слушать надо оба места. Иначе листание не двигало бы ни места, ни процента.
+  article.addEventListener("scroll", scrolled, { passive: true });
 }
 
 /**
@@ -186,18 +208,42 @@ function showProgress(block: number): void {
   progressLabel.textContent = percent === null ? "" : `${percent}%`;
 }
 
-/** Прокручивает к блоку. Именно к нему, а не примерно туда. */
+/**
+ * Куда читалка только что перешла сама.
+ *
+ * Держится до первого движения читателя и только в развороте: при прокрутке
+ * абзац встаёт ровно к краю, и разницы между «куда шли» и «что видно» нет.
+ */
+let jumped: number | null = null;
+
+/**
+ * Прокручивает к блоку. Именно к нему, а не примерно туда.
+ *
+ * В развороте прокручивается книга по горизонтали, а не окно по вертикали, —
+ * и этим одним отличием оглавление, поиск, закладки и сноски продолжают
+ * работать как были: все они переходят к блоку и ничего не знают о страницах.
+ */
 function goToBlock(block: number): void {
   const target = article.querySelector<HTMLElement>(`[data-block="${block}"]`);
   if (!target) return;
-  window.scrollBy(0, target.getBoundingClientRect().top - readingTop());
+  if (spread()) {
+    const s = spreadStep();
+    const x =
+      target.getBoundingClientRect().left - article.getBoundingClientRect().left + article.scrollLeft;
+    article.scrollLeft = pageLeft(pageAt(x, s), s);
+    // Место — тот абзац, к которому шли, а не тот, с которого начался разворот.
+    jumped = block;
+  } else {
+    window.scrollBy(0, target.getBoundingClientRect().top - readingTop());
+  }
   open?.keeper.moved(block);
   showProgress(block);
   showMarkState(block);
   // Прыжок через всю книгу — самое место, где ленивая вёрстка уносит: высоты
   // всего, что осталось выше, только теперь и уточняются. Держим начало
-  // абзаца, потому что к нему и переходили.
-  holdPlaceAt({ block, part: 0 });
+  // абзаца, потому что к нему и переходили. В развороте держать не за чем:
+  // ленивой вёрстки там нет, и высоты не уточняются.
+  if (!spread()) holdPlaceAt({ block, part: 0 });
 }
 
 // --- картинки --------------------------------------------------------------
@@ -521,13 +567,18 @@ let size = DEFAULT_TEXT;
  * этого настройка стоила бы читателю потерянной страницы при каждом нажатии.
  */
 async function applySize(next: number): Promise<void> {
-  const anchor = open ? anchorAtTop() : null;
+  // В развороте держаться за долю абзаца незачем: строки уходят в соседнюю
+  // колонку, а не вниз, и место возвращается переходом к абзацу — тем же, что
+  // у оглавления.
+  const anchor = open && !spread() ? anchorAtTop() : null;
+  const block = open && spread() ? blockAtTop() : null;
   size = next;
   document.documentElement.style.setProperty("--text", `${next}rem`);
   showSizeEdges();
   // Придержка сама возвращает на место — первым же делом и потом ещё
   // несколько кадров, пока высоты уточняются.
   if (anchor) holdPlaceAt(anchor);
+  if (block !== null) goToBlock(block);
   await store.saveSettings({ text: next });
 }
 
@@ -648,9 +699,17 @@ function holdPlaceAt(anchor: Anchor): void {
  * «крупнее».
  */
 function blockAtTop(): number | null {
-  const edge = readingTop();
   const nodes = article.querySelectorAll<HTMLElement>("[data-block]");
-  const at = searchTop(nodes.length, (index) => nodes[index]!.getBoundingClientRect().top - edge);
+  // В развороте тот же поиск, но мерка другая: не «верх абзаца минус край
+  // окна», а «левый край абзаца минус левый край книги». Ответ он даёт верный и
+  // в тонком случае: абзац, начавшийся на прошлой странице и продолжающийся на
+  // этой, левее края — и он последний такой, то есть его и читают. Взять
+  // следующий значило бы увести место вперёд через полстраницы текста.
+  const edge = spread() ? article.getBoundingClientRect().left : readingTop();
+  const at = searchTop(nodes.length, (index) => {
+    const rect = nodes[index]!.getBoundingClientRect();
+    return (spread() ? rect.left : rect.top) - edge;
+  });
   return at === null ? null : Number(nodes[at]!.dataset["block"]);
 }
 
@@ -659,6 +718,179 @@ function showSizeEdges(): void {
   smaller.disabled = atEdge(size, -1);
   bigger.disabled = atEdge(size, 1);
 }
+
+// --- разворот --------------------------------------------------------------
+
+/**
+ * Разворот — две колонки на широком окне.
+ *
+ * Он листается, а не прокручивается, и это не выбор вкуса: многоколонник CSS
+ * ведёт текст до низа первой колонки и продолжает в следующей, так что при
+ * прокрутке вниз читателю пришлось бы возвращаться наверх за каждой второй
+ * колонкой. Две колонки в браузере неизбежно означают страницы — тот же
+ * разворот, что в терминале, и включается он той же клавишей.
+ */
+
+/** Выбор читателя. Окно может его и не пустить — тогда читаем прокруткой. */
+let spreadWanted = false;
+
+/** Читают ли разворотом сейчас. Правду знает страница, а не наша память. */
+function spread(): boolean {
+  return document.body.classList.contains("spread");
+}
+
+/** Размер корневого шрифта: порог разворота считается в рем, а не в пикселях. */
+function rootSize(): number {
+  return parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+}
+
+function spreadFits(): boolean {
+  return fitsSpread(window.innerWidth, window.innerHeight, rootSize());
+}
+
+/**
+ * Высота панели — стилям.
+ *
+ * Из неё считается высота колонки, а заранее она неизвестна: панель переносит
+ * кнопки на вторую строку, когда они не встают в одну. Раскрытый список при
+ * этом нарочно не учитывается: он накрывает текст собой. Учесть его значило бы
+ * пересчитывать всю книгу при каждом открытии оглавления — на книге в шесть
+ * тысяч абзацев это 1.3 секунды.
+ */
+function measureBar(): void {
+  const height = bar.hidden ? 0 : bar.getBoundingClientRect().height;
+  document.documentElement.style.setProperty("--bar", `${height}px`);
+}
+
+/** Шаг страницы в пикселях. */
+function spreadStep(): number {
+  const style = getComputedStyle(article);
+  const content =
+    article.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  return pageStep(content, parseFloat(style.columnGap) || 0);
+}
+
+/** Какую страницу видно. */
+function pageNow(): number {
+  return pageAt(article.scrollLeft, spreadStep());
+}
+
+/**
+ * Сколько всего страниц.
+ *
+ * По длине книги, а не по числу абзацев: страница — это мера длины, и знать её
+ * надо в тех же пикселях, в которых книга разложена по колонкам.
+ */
+function pagesTotal(): number {
+  return pageCount(article.scrollWidth, spreadStep());
+}
+
+/** Листает на страницу в нужную сторону. */
+function turnPage(delta: number): void {
+  const s = spreadStep();
+  article.scrollLeft = pageLeft(stepPage(pageNow(), delta, pagesTotal()), s);
+}
+
+/** В начало или в конец книги. */
+function turnToEnd(last: boolean): void {
+  const s = spreadStep();
+  article.scrollLeft = last ? pageLeft(pagesTotal() - 1, s) : 0;
+}
+
+/** Кнопка: нажатой она показывает выбор, а не то, что вышло. */
+function showSpreadState(): void {
+  spreadButton.hidden = !spreadFits();
+  spreadButton.setAttribute("aria-pressed", spreadWanted ? "true" : "false");
+}
+
+/**
+ * Приводит вид книги к выбору читателя и к размеру окна.
+ *
+ * Место возвращается и тогда, когда режим не менялся: если окно стало другим,
+ * колонки пересчитались, и под читателем уже другая страница.
+ */
+function refitSpread(): void {
+  const want = spreadWanted && spreadFits();
+  const было = spread();
+  // Место мерится до переключения — в том виде, в котором книга сейчас лежит.
+  //
+  // В развороте его спрашивают у хранителя, и это единственное место, где так
+  // можно. Обычно хранителю не верят: он узнаёт место от слежения, а оно идёт
+  // кадрами, и ответ бывает вчерашним. Но здесь измерение по странице даёт не
+  // запоздалый ответ, а неверный: страница начинается не с того абзаца, который
+  // читают, а с того, что попал в её левый верх. Переключение режима туда и
+  // обратно уводило читателя на сорок абзацев назад — поймано проверкой.
+  const block = open ? (было ? open.keeper.current() : blockAtTop()) : null;
+  document.body.classList.toggle("spread", want);
+  listenWheel(want);
+  measureBar();
+  showSpreadState();
+  if (block !== null && (want || было)) goToBlock(block);
+}
+
+/** Выбор читателя: запоминается, как тема и размер текста. */
+async function chooseSpread(on: boolean): Promise<void> {
+  spreadWanted = on;
+  refitSpread();
+  await store.saveSettings({ columns: on ? 2 : 1 });
+}
+
+/**
+ * Придержка перевёрстки при изменении окна.
+ *
+ * Ровно та же причина, что у SIGWINCH в терминале: протяжку мышью браузер
+ * выдаёт десятками событий, а каждое стоит перевёрстки книги и возврата на
+ * место. Одиночного изменения размера задержка не показывает.
+ */
+const RESIZE_WAIT = 80;
+let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+
+window.addEventListener("resize", () => {
+  // Пометка снимается вместе с придержкой: пока она стоит, вёрстка ленивая и
+  // дешёвая, и протяжка идёт плавно.
+  if (spread()) document.body.classList.add("resizing");
+  if (resizeTimer !== null) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    resizeTimer = null;
+    document.body.classList.remove("resizing");
+    refitSpread();
+  }, RESIZE_WAIT);
+});
+
+/**
+ * Колесо листает, а не прокручивает.
+ *
+ * Придержка нужна не для красоты: трекпад на одно движение пальцем шлёт
+ * десятки событий, и без неё книга улетала бы на десяток страниц.
+ */
+const TURN_WAIT = 220;
+let turnedAt = -Infinity;
+
+function turnByWheel(event: WheelEvent): void {
+  // Иначе браузер прокрутит страницу по вертикали, которой в развороте нет.
+  event.preventDefault();
+  const delta = event.deltaY || event.deltaX;
+  if (!delta) return;
+  const now = performance.now();
+  if (now - turnedAt < TURN_WAIT) return;
+  turnedAt = now;
+  turnPage(Math.sign(delta));
+}
+
+/**
+ * Колесо слушается только в развороте.
+ *
+ * Обработчик отменяет прокрутку, а значит, не passive: браузер обязан
+ * дождаться его, прежде чем прокрутить страницу. В развороте это и нужно, а при
+ * обычной прокрутке — вредно: браузер ждал бы нас перед каждым поворотом
+ * колеса, чтобы услышать в ответ «прокручивай как хотел».
+ */
+function listenWheel(on: boolean): void {
+  article.removeEventListener("wheel", turnByWheel);
+  if (on) article.addEventListener("wheel", turnByWheel, { passive: false });
+}
+
+spreadButton.addEventListener("click", () => void chooseSpread(!spreadWanted));
 
 // --- темы ------------------------------------------------------------------
 
@@ -978,6 +1210,9 @@ async function show(book: ParsedBook): Promise<void> {
   article.hidden = false;
   start.hidden = true;
   bar.hidden = false;
+  // Вид приводится к выбору читателя до восстановления места: в развороте место
+  // ищется по страницам, а не по прокрутке окна.
+  refitSpread();
   fillToc(book);
   query.value = "";
   findCount.textContent = "";
@@ -1003,6 +1238,7 @@ async function show(book: ParsedBook): Promise<void> {
   // Место читается до слежения: иначе первый же кадр перетёр бы его нулём.
   const saved = await store.loadPosition(book.hash);
   if (saved > 0) goToBlock(saved);
+  else if (spread()) article.scrollLeft = 0;
   else window.scrollTo(0, 0);
   showProgress(saved);
   showMarkState(saved);
@@ -1163,6 +1399,33 @@ document.addEventListener("keydown", (event) => {
     case "c":
       void applyTheme(nextTheme(document.documentElement.getAttribute("data-theme") ?? "auto"));
       break;
+    case "v":
+      // Та же клавиша, что переключает разворот в терминале.
+      void chooseSpread(!spreadWanted);
+      break;
+    // Листание. При прокрутке эти клавиши оставлены браузеру: он прокручивает
+    // ими сам, и делает это лучше нас.
+    case " ":
+    case "ArrowRight":
+    case "ArrowDown":
+    case "PageDown":
+      if (!spread()) break;
+      event.preventDefault();
+      turnPage(1);
+      break;
+    case "ArrowLeft":
+    case "ArrowUp":
+    case "PageUp":
+      if (!spread()) break;
+      event.preventDefault();
+      turnPage(-1);
+      break;
+    case "Home":
+    case "End":
+      if (!spread()) break;
+      event.preventDefault();
+      turnToEnd(event.key === "End");
+      break;
     case "Backspace":
       goBack();
       break;
@@ -1206,6 +1469,8 @@ void store.loadSettings().then((settings) => {
   size = textSize(settings["text"]);
   document.documentElement.style.setProperty("--text", `${size}rem`);
   showSizeEdges();
+  // Разворот записан тем же числом, что и в терминале: 1 или 2.
+  spreadWanted = settings.columns === 2;
 });
 
 // Версия — на первом экране. С домашнего экрана адресной строки нет, и узнать,
