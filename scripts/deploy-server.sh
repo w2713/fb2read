@@ -106,12 +106,18 @@ fi
 
 # --- сборка -----------------------------------------------------------------
 
+# Каждый шаг объясняется, если не сложился. Молчащий деплой — худший из
+# возможных: скрипт однажды вышел сразу после «беру main», и что именно
+# споткнулось, узнать было неоткуда.
 say "беру $REF"
-git -C "$ROOT" fetch --quiet origin --tags --prune
-git -C "$ROOT" checkout --quiet "$REF" || fail "нет такой ветки или тега: $REF"
+git -C "$ROOT" fetch origin --tags --prune ||
+    fail "не удалось сходить за обновлениями: git fetch отказал"
+git -C "$ROOT" checkout "$REF" || fail "нет такой ветки или тега: $REF"
 # На ветке — ещё и подтянуть; на теге подтягивать нечего, HEAD там отсоединён.
 if git -C "$ROOT" symbolic-ref -q HEAD > /dev/null; then
-    git -C "$ROOT" pull --quiet --ff-only
+    git -C "$ROOT" pull --ff-only ||
+        fail "git pull --ff-only не прошёл: ветка разошлась с origin.
+Посмотрите git status и git log --oneline -3 origin/$REF..$REF"
 fi
 say "собран будет $(git -C "$ROOT" log --oneline -1)"
 
