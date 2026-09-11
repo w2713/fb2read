@@ -7,6 +7,7 @@
 
 import type { Block } from "./block.js";
 import type { Span } from "./inline.js";
+import { justify } from "./justify.js";
 import { strWidth } from "./width.js";
 import { wrapWords } from "./wrap.js";
 
@@ -68,13 +69,28 @@ function lineStyles(
   return out;
 }
 
+/** Как верстать сверх обычного. */
+export interface Look {
+  /** Выключка по формату: ровный правый край. */
+  justify?: boolean;
+}
+
 /**
  * Раскладывает блоки в строки.
  *
  * `spacing` — межстрочный интервал (1 обычный, 2 двойной): полезен при
  * крупном шрифте терминала, когда строк на экране мало.
+ *
+ * `look` пуст по умолчанию, и это важно: вывод `--dump` сверяется с эталонной
+ * реализацией побайтно, а она ни выключки, ни переносов не знает. Всё новое
+ * включается только по просьбе.
  */
-export function layout(blocks: readonly Block[], width: number, spacing = 1): Line[] {
+export function layout(
+  blocks: readonly Block[],
+  width: number,
+  spacing = 1,
+  look: Look = {},
+): Line[] {
   const out: Line[] = [];
   const columnWidth = Math.max(width, 20);
 
@@ -112,12 +128,14 @@ export function layout(blocks: readonly Block[], width: number, spacing = 1): Li
         const chunks = wrapped.length ? wrapped : [["", 0] as const];
         chunks.forEach(([chunk, offset], n) => {
           const pad = n === 0 ? st.first : st.indent;
-          out.push({
-            text: " ".repeat(pad) + chunk,
-            attr: st.attr,
-            block: i,
-            styles: lineStyles(b.spans, base, chunk, offset, pad),
-          });
+          const text = " ".repeat(pad) + chunk;
+          const styles = lineStyles(b.spans, base, chunk, offset, pad);
+          // Последнюю строку абзаца не выключают: иначе конец главы вышел бы
+          // строкой из трёх слов, растянутой во всю ширину. Стихи не выключают
+          // тоже — там ровный правый край не нужен и мешает.
+          const stretch = look.justify && b.kind !== "v" && n < chunks.length - 1;
+          const ready = stretch ? justify(text, styles, columnWidth) : { text, styles };
+          out.push({ text: ready.text, attr: st.attr, block: i, styles: ready.styles });
         });
       }
       base += para.length + 1;
