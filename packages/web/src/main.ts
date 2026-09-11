@@ -759,6 +759,11 @@ function spreadFits(): boolean {
  */
 function measureBar(): void {
   const height = bar.hidden ? 0 : bar.getBoundingClientRect().height;
+  const было = document.documentElement.style.getPropertyValue("--bar");
+  // Запись свойства в корень пересчитывает стиль всего документа, поэтому
+  // пишем, только когда высота и правда другая. Заодно это не трогает страницу
+  // при обычной прокрутке, где переменная не нужна вовсе.
+  if (было === `${height}px`) return;
   document.documentElement.style.setProperty("--bar", `${height}px`);
 }
 
@@ -823,7 +828,8 @@ function refitSpread(): void {
   const block = open ? (было ? open.keeper.current() : blockAtTop()) : null;
   document.body.classList.toggle("spread", want);
   listenWheel(want);
-  measureBar();
+  // Высота панели нужна только развороту: из неё считается высота колонки.
+  if (want) measureBar();
   showSpreadState();
   if (block !== null && (want || было)) goToBlock(block);
 }
