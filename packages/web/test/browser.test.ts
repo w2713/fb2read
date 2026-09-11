@@ -138,6 +138,7 @@ async function openBook(page: Page, name = "Анна Каренина.fb2", byte
   await page.goto(base);
   await give(page, name, bytes);
   await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+  await settled(page);
 }
 
 
@@ -170,6 +171,40 @@ function longBook(withImage = false): Uint8Array {
     (withImage ? `<binary id="pic1" content-type="image/png">${PNG_BASE64}</binary>` : "") +
     "</FictionBook>";
   return new TextEncoder().encode(xml);
+}
+
+/**
+ * Книга настоящего размера.
+ *
+ * «Долгая книга» в сто двадцать абзацев для ленивой вёрстки мала: она почти
+ * целиком помещается в те несколько экранов, которые браузер верстает и так, и
+ * разницы между ленивой вёрсткой и полной на ней не видно. Настоящая книга —
+ * это тысячи абзацев, и вся затея ради них.
+ *
+ * Абзацы разной длины и называют сами себя: по тексту видно, тот ли это абзац,
+ * за номер которого он себя выдаёт.
+ */
+function bigBook(count: number): Uint8Array {
+  const слова =
+    "Все счастливые семьи похожи друг на друга каждая несчастливая семья несчастлива по своему".split(
+      " ",
+    );
+  const абзацы: string[] = [];
+  for (let i = 0; i < count; i += 1) {
+    const длина = 25 + (i % 40);
+    const текст: string[] = [];
+    for (let k = 0; k < длина; k += 1) текст.push(слова[(i + k) % слова.length]!);
+    абзацы.push(`<p>Абзац номер ${i}. ${текст.join(" ")}</p>`);
+  }
+  return new TextEncoder().encode(
+    '<?xml version="1.0" encoding="utf-8"?>' +
+      '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">' +
+      "<description><title-info><book-title>Большая книга</book-title>" +
+      "</title-info></description><body>" +
+      `<section><title><p>Часть первая</p></title>${абзацы.slice(0, count / 2).join("")}</section>` +
+      `<section><title><p>Часть вторая</p></title>${абзацы.slice(count / 2).join("")}</section>` +
+      "</body></FictionBook>",
+  );
 }
 
 /**
@@ -239,13 +274,62 @@ async function savedBlocks(page: Page): Promise<number[]> {
   return (await savedRecords(page)).map((record) => record.block);
 }
 
-/** Прокручивает к блоку так же, как это сделал бы читатель пальцем. */
+/**
+ * Ждёт, пока страница устоится.
+ *
+ * Вёрстка ленивая: высоты абзацев, до которых читатель не дошёл, сперва
+ * угаданы, а потом уточняются, и высота страницы несколько кадров гуляет.
+ * Пока она гуляет, читалка придерживает место — и мерить в этот миг значит
+ * мерить то, чего читатель никогда не видел: снятый с экрана снимок в этот
+ * момент ещё вовсе пуст.
+ *
+ * Потолок больше, чем у самой придержки: иначе проверка отвернулась бы раньше,
+ * чем читалка перестала поправлять.
+ */
+async function settled(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((done) => {
+        let было = -1;
+        let тихих = 0;
+        const начало = performance.now();
+        const кадр = (): void => {
+          const высота = document.documentElement.scrollHeight;
+          тихих = высота === было ? тихих + 1 : 0;
+          было = высота;
+          if (тихих >= 3 || performance.now() - начало > 2500) done();
+          else requestAnimationFrame(кадр);
+        };
+        requestAnimationFrame(кадр);
+      }),
+  );
+}
+
+/**
+ * Ставит читателя на блок и оставляет его там.
+ *
+ * Одной прокрутки мало: вёрстка ленивая, и высоты абзацев над местом чтения
+ * уточняются уже после прыжка — блок уезжает из-под читателя. В самой читалке
+ * за этим следит придержка (`hold.ts`), но она включается на её собственных
+ * переходах, а не на прокрутке из проверки. Поэтому здесь то же самое делается
+ * руками: прокрутить, дать устояться, поправить — пока не встанет.
+ */
 async function scrollToBlock(page: Page, block: number): Promise<void> {
-  await page.evaluate((n) => {
-    const node = document.querySelector(`[data-block="${n}"]`)!;
-    const panel = document.querySelector("#top")!.getBoundingClientRect().bottom;
-    window.scrollBy(0, node.getBoundingClientRect().top - Math.max(panel, 0));
-  }, block);
+  const край = async (): Promise<number> =>
+    page.evaluate((n) => {
+      const node = document.querySelector(`[data-block="${n}"]`)!;
+      const panel = document.querySelector("#top")!.getBoundingClientRect().bottom;
+      const top = node.getBoundingClientRect().top - Math.max(panel, 0);
+      window.scrollBy(0, top);
+      return top;
+    }, block);
+
+  for (let попытка = 0; попытка < 8; попытка += 1) {
+    await край();
+    await settled(page);
+    // Ещё раз: устоявшись, страница могла сдвинуться под читателем.
+    if (Math.abs(await край()) <= 1) return;
+  }
 }
 
 /**
@@ -256,6 +340,7 @@ async function scrollToBlock(page: Page, block: number): Promise<void> {
  */
 async function readAt(page: Page, block: number): Promise<void> {
   await scrollToBlock(page, block);
+  await settled(page);
   // Ждём не «процент изменился», а «процент стал тем самым».
   //
   // Изменение — слишком слабый признак: процент дёргается и от схлопывания
@@ -306,6 +391,23 @@ function topBlock(page: Page): Promise<number | null> {
     }
     return (above ?? below)?.block ?? null;
   });
+}
+
+/**
+ * На какой своей доле абзац пересекает край чтения.
+ *
+ * Ноль — абзац только начался у края, -0.5 — прочитана половина, -1 — он весь
+ * ушёл вверх. Мерить в долях, а не в пикселях, приходится потому, что при
+ * крупном шрифте абзац выше, и то же место в тексте даёт совсем другое число
+ * пикселей. Это ровно то, что читалка и обещает сохранить при перевёрстке.
+ */
+function partOf(page: Page, block: number): Promise<number> {
+  return page.evaluate((n) => {
+    const node = document.querySelector(`[data-block="${n}"]`)!;
+    const panel = document.querySelector("#top")!.getBoundingClientRect().bottom;
+    const rect = node.getBoundingClientRect();
+    return rect.height ? (rect.top - Math.max(panel, 0)) / rect.height : 0;
+  }, block);
 }
 
 function blockTop(page: Page, block: number): Promise<number> {
@@ -426,6 +528,7 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     await page.reload();
     await give(page, "Долгая книга.fb2", longBook());
     await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await settled(page);
 
     // Не «примерно туда»: записанный абзац стоит ровно у края места для чтения,
     // а не под панелью и не экраном ниже.
@@ -712,6 +815,7 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     expect(до).not.toBeNull();
 
     for (let i = 0; i < 3; i += 1) await page.click("#bigger");
+    await settled(page);
 
     // Обещание: читатель не уехал больше, чем на строку. Точного равенства
     // требовать нельзя — на границе абзацев округление честно перекидывает
@@ -721,6 +825,135 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     expect(после).not.toBeNull();
     expect(Math.abs(после! - до!)).toBeLessThanOrEqual(1);
     expect(Math.abs(await blockTop(page, до!))).toBeLessThan(60);
+    await page.close();
+  }, SLOW);
+
+  it("смена размера не уносит с места и в большой книге", async () => {
+    // На ста двадцати абзацах возврат к абзацу справляется и без придержки:
+    // вёрстка там укладывается в один кадр. Настоящая книга — другое дело:
+    // высоты уточняются ещё долго после нажатия, и без придержки читателя
+    // уносит уже после того, как его вернули на место.
+    const page = await browser.newPage();
+    await openBook(page, "Большая книга.fb2", bigBook(3000));
+    await page.addStyleTag({
+      content: "html, body, #book, #book * { overflow-anchor: none !important; }",
+    });
+    await readAt(page, 1500);
+
+    const до = await topBlock(page);
+    expect(до).not.toBeNull();
+    const доля = await partOf(page, до!);
+
+    for (let i = 0; i < 3; i += 1) await page.click("#bigger");
+    await settled(page);
+
+    const после = await topBlock(page);
+    expect(Math.abs(после! - до!)).toBeLessThanOrEqual(1);
+    // И то же место внутри абзаца: читатель смотрит на ту же строку, а не на
+    // начало абзаца, который дочитал до середины. Без придержки он уезжает на
+    // добрый десяток абзацев, и доля уходит далеко за единицу.
+    expect(Math.abs((await partOf(page, до!)) - доля)).toBeLessThan(1);
+    await page.close();
+  }, SLOW);
+
+  it("большая книга не дороже маленькой при смене размера", async () => {
+    // Это и есть ленивая вёрстка, выраженная числом: если книга верстается
+    // целиком, то менять размер в книге на три тысячи абзацев втрое дороже,
+    // чем в книге на двести — измерено, 200 мс против 67. Если верстается
+    // только видимое, цена от размера книги не зависит вовсе.
+    //
+    // Отношение, а не миллисекунды: машина под проверкой бывает и чужая, и
+    // занятая, а отношение переживает и то и другое.
+    const цена = async (blocks: number): Promise<number> => {
+      const page = await browser.newPage();
+      await openBook(page, "Большая книга.fb2", bigBook(blocks));
+      const мс = await page.evaluate(async () => {
+        const устоялась = (): Promise<void> =>
+          new Promise((done) => {
+            let было = -1;
+            let тихих = 0;
+            const начало = performance.now();
+            const кадр = (): void => {
+              const высота = document.documentElement.scrollHeight;
+              тихих = высота === было ? тихих + 1 : 0;
+              было = высота;
+              if (тихих >= 3 || performance.now() - начало > 2500) done();
+              else requestAnimationFrame(кадр);
+            };
+            requestAnimationFrame(кадр);
+          });
+        const t0 = performance.now();
+        document.querySelector<HTMLButtonElement>("#bigger")!.click();
+        await устоялась();
+        return performance.now() - t0;
+      });
+      await page.close();
+      return мс;
+    };
+
+    const малая = await цена(200);
+    const большая = await цена(3000);
+    expect(большая / малая).toBeLessThan(2);
+  }, 120_000);
+
+  it("переход в конец большой книги не уползает", async () => {
+    // Прыжок через всю книгу — худший случай для ленивой вёрстки: высоты всего,
+    // что осталось выше, только теперь и уточняются, и читателя сносит уже
+    // после того, как он пришёл.
+    const page = await browser.newPage();
+    await openBook(page, "Большая книга.fb2", bigBook(3000));
+    await page.addStyleTag({
+      content: "html, body, #book, #book * { overflow-anchor: none !important; }",
+    });
+
+    await page.click("#toc-toggle");
+    // Последняя глава — «Часть вторая», то есть середина книги и дальше.
+    await page.$$eval("#toc button", (nodes) => (nodes.at(-1) as HTMLElement).click());
+    await settled(page);
+
+    // Заголовок главы стоит ровно у края места для чтения — не под панелью и не
+    // экраном ниже. Без придержки его уносит на сотни пикселей.
+    const заголовок = await page.evaluate(() => {
+      const узлы = [...document.querySelectorAll<HTMLElement>("#book h1, #book h2, #book h3")];
+      const нужный = узлы.find((узел) => узел.textContent === "Часть вторая")!;
+      return Number(нужный.dataset["block"]);
+    });
+    expect(заголовок).toBeGreaterThan(1400);
+    // Соседний блок засчитывается: когда заголовок стоит ровно по краю, какой
+    // из двух считать верхним — дело округления в доли пикселя.
+    expect(Math.abs((await topBlock(page))! - заголовок)).toBeLessThanOrEqual(1);
+    expect(Math.abs(await blockTop(page, заголовок))).toBeLessThan(5);
+    await page.close();
+  }, SLOW);
+
+  it("абзац знает свой номер и в конце большой книги", async () => {
+    // Номер блока — это место чтения: по нему книга открывается и на телефоне,
+    // и в терминале. Абзацы книги называют себя сами, поэтому сдвиг нумерации
+    // виден прямо в тексте.
+    //
+    // Смещение не задаётся числом, а считается по странице: заголовки частей —
+    // тоже блоки, и сколько их прошло, столько и сдвиг. Так проверка стережёт
+    // нумерацию, а не мою догадку о разборщике.
+    const page = await browser.newPage();
+    await openBook(page, "Большая книга.fb2", bigBook(3000));
+    await readAt(page, 2900);
+
+    const разошлись = await page.evaluate(() => {
+      const плохие: string[] = [];
+      let абзацев = 0;
+      let индекс = 0;
+      for (const узел of document.querySelectorAll<HTMLElement>("#book [data-block]")) {
+        if (Number(узел.dataset["block"]) !== индекс) плохие.push(`подряд: ${индекс}`);
+        индекс += 1;
+        const сказано = /^Абзац номер (\d+)\./.exec(узел.textContent ?? "");
+        if (!сказано) continue;
+        if (Number(сказано[1]) !== абзацев) плохие.push(`${узел.dataset["block"]}: ${сказано[1]}`);
+        абзацев += 1;
+      }
+      if (абзацев !== 3000) плохие.push(`абзацев ${абзацев}`);
+      return плохие.slice(0, 5);
+    });
+    expect(разошлись).toEqual([]);
     await page.close();
   }, SLOW);
 
@@ -749,6 +982,7 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     await page.waitForSelector("#shelf li", { timeout: 10_000 });
     await page.click("#shelf .shelf-open");
     await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await settled(page);
     expect(
       await page.evaluate(() => getComputedStyle(document.querySelector("#book")!).fontSize),
     ).toBe(выбранный);
@@ -867,6 +1101,7 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     // Открывается касанием: файл больше не выбирают.
     await page.click("#shelf .shelf-open");
     await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await settled(page);
     expect(await page.textContent("#book")).toContain("Абзац номер 30.");
 
     // И открывается там, где бросили.
@@ -907,6 +1142,7 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     // Место пережило удаление: вернув ту же книгу, читатель попадёт туда же.
     await give(page, "Долгая книга.fb2", longBook());
     await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await settled(page);
     expect(Math.abs(await blockTop(page, was))).toBeLessThan(40);
     await page.close();
   }, SLOW);

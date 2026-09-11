@@ -8,39 +8,78 @@
 
 import type { PositionRecord, StateStore } from "@fb2read/core";
 import { describe, expect, it, vi } from "vitest";
-import { SAVE_EVERY_MS, keepPosition, topmost } from "../src/position.js";
+import { SAVE_EVERY_MS, keepPosition, searchTop } from "../src/position.js";
+
+/** Верх каждого абзаца по порядку — то, что читалка мерит у страницы. */
+function tops(list: readonly number[]): (index: number) => number {
+  return (index) => list[index]!;
+}
 
 describe("какой блок читают", () => {
   it("тот, что начался выше края экрана", () => {
     // Абзац, который читают, обычно уже уехал верхом за край.
-    expect(topmost([
-      { block: 3, top: -200 },
-      { block: 4, top: -20 },
-      { block: 5, top: 300 },
-    ])).toBe(4);
+    expect(searchTop(3, tops([-200, -20, 300]))).toBe(1);
   });
 
   it("в самом начале книги — первый видимый", () => {
-    expect(topmost([
-      { block: 0, top: 40 },
-      { block: 1, top: 300 },
-    ])).toBe(0);
+    expect(searchTop(2, tops([40, 300]))).toBe(0);
   });
 
   it("не уводит вперёд на длинном абзаце", () => {
     // Самый заметный на экране — следующий, но читают всё ещё этот.
-    expect(topmost([
-      { block: 7, top: -10 },
-      { block: 8, top: 700 },
-    ])).toBe(7);
+    expect(searchTop(2, tops([-10, 700]))).toBe(0);
   });
 
   it("ровно по краю считается текущим", () => {
-    expect(topmost([{ block: 2, top: 0 }, { block: 3, top: 500 }])).toBe(2);
+    // Три абзаца, а не два: на двух ответ совпал бы и при «строго выше края»,
+    // и проверка ничего бы не стерегла.
+    expect(searchTop(3, tops([-100, 0, 300]))).toBe(1);
   });
 
-  it("когда ничего не видно, ответа нет", () => {
-    expect(topmost([])).toBeNull();
+  it("когда абзацев нет вовсе, ответа нет", () => {
+    expect(searchTop(0, tops([]))).toBeNull();
+  });
+
+  it("в конце книги — последний абзац, а не мимо него", () => {
+    // Дочитали до конца: выше края оказались все, и ответ — последний.
+    expect(searchTop(3, tops([-900, -600, -300]))).toBe(2);
+  });
+
+  it("отвечает то же, что перебор, на любой книге", () => {
+    // Перебор — независимый судья: он не знает про деление пополам и написан
+    // здесь заново. Расхождение на одном абзаце стоило бы потерянного места.
+    let seed = 12_345;
+    const random = (): number => {
+      seed = (seed * 1_103_515_245 + 12_345) % 2_147_483_648;
+      return seed / 2_147_483_648;
+    };
+    for (let книга = 0; книга < 200; книга += 1) {
+      const count = 1 + Math.floor(random() * 60);
+      const list: number[] = [];
+      // Каждая четвёртая книга открыта в самом начале: тогда выше края нет
+      // ничего, и ответом должен быть первый абзац.
+      let top = random() < 0.25 ? Math.floor(random() * 400) : -Math.floor(random() * 3000);
+      for (let i = 0; i < count; i += 1) {
+        list.push(top);
+        // Высота абзаца бывает и нулевой: отбивка между главами.
+        top += Math.floor(random() * 120);
+      }
+      let перебором = 0;
+      for (let i = 0; i < count; i += 1) if (list[i]! <= 0) перебором = i;
+      expect(searchTop(count, tops(list))).toBe(перебором);
+    }
+  });
+
+  it("измеряет считанные абзацы, а не всю книгу", () => {
+    // Ради этого всё и затевалось: на книге в шесть тысяч абзацев перебор
+    // стоил шести тысяч замеров при каждом нажатии «крупнее».
+    let замеров = 0;
+    const count = 6000;
+    searchTop(count, (index) => {
+      замеров += 1;
+      return (index - 3000) * 50;
+    });
+    expect(замеров).toBeLessThan(20);
   });
 });
 

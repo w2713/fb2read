@@ -24,7 +24,8 @@ import { IdbStore, type BookMeta } from "./db.js";
 import { firstFrom, step } from "./find.js";
 import { DEFAULT_TEXT, atEdge, stepSize, textSize } from "./look.js";
 import { marked, removeMark, sortedMarks, toggleMark } from "./marks.js";
-import { keepPosition, topmost, type Keeper } from "./position.js";
+import { holdPlace, type Holder } from "./hold.js";
+import { keepPosition, searchTop, type Keeper } from "./position.js";
 import { renderBook, renderOne } from "./render.js";
 import {
   exchange,
@@ -110,16 +111,18 @@ interface Open {
 }
 
 let open: Open | null = null;
-let watcher: IntersectionObserver | null = null;
+/** Слежение за местом: снимается вместе с книгой. */
+let scrolled: (() => void) | null = null;
 let images: IntersectionObserver | null = null;
 /** Показанные картинки: адреса нужно отзывать, иначе память течёт. */
 const shown = new Map<string, string>();
 
 /** Закрывает предыдущую книгу: наблюдатели и адреса не должны накапливаться. */
 async function closeOpen(): Promise<void> {
-  watcher?.disconnect();
+  if (scrolled) window.removeEventListener("scroll", scrolled);
+  scrolled = null;
   images?.disconnect();
-  watcher = images = null;
+  images = null;
   for (const url of shown.values()) URL.revokeObjectURL(url);
   shown.clear();
   if (open) {
@@ -136,44 +139,33 @@ async function closeOpen(): Promise<void> {
 /**
  * Следит, какой блок наверху окна, и отдаёт его хранителю позиции.
  *
- * Запоминаются сами элементы, а не их положение: положение из `entry` — это
- * снимок того мгновения, когда абзац пересёк край, и для абзаца, оставшегося
- * на экране, оно больше не обновляется. Прокрутка на страницу как раз половину
- * абзацев на экране и оставляет — с запомненными числами читалка после неё
- * считала текущим абзац на экран ниже настоящего.
+ * Раньше за этим следил IntersectionObserver, которому показывали каждый абзац
+ * книги: шесть тысяч вызовов `observe` при открытии — и ответ с запозданием.
+ * Запоздание стоило дорого: наблюдатель называет блок не в тот миг, когда его
+ * спросили, а в тот, когда абзац пересёк край, и при двух действиях подряд
+ * ответ оказывался вчерашним — измерено, книга уезжала на восемьсот пикселей.
+ * Оттуда и взялся `blockAtTop`, читающий правду прямо со страницы.
+ *
+ * Теперь правда одна: место читается со страницы при прокрутке, не чаще раза
+ * в кадр. И наблюдателя нет вовсе.
  */
 function watchPosition(keeper: Keeper): void {
-  const seen = new Map<number, Element>();
-  watcher = new IntersectionObserver(
-    (entries) => {
-      for (const entry of entries) {
-        const block = Number((entry.target as HTMLElement).dataset["block"]);
-        if (entry.isIntersecting) seen.set(block, entry.target);
-        else seen.delete(block);
-      }
-      const now = topmost(
-        [...seen]
-          // Абзац могли перерисовать: у вынутого из страницы нет положения,
-          // и ноль от него сошёл бы за верх экрана.
-          .filter(([, node]) => node.isConnected)
-          // Отсчёт идёт от низа панели, а не от верха окна: под панелью текста
-          // не видно, и абзац, спрятанный за ней, читают уже не его.
-          .map(([block, node]) => ({
-            block,
-            top: node.getBoundingClientRect().top - readingTop(),
-          })),
-      );
-      if (now !== null) {
-        keeper.moved(now);
-        showProgress(now);
-        showMarkState(now);
-      }
-    },
-    // Наблюдатель только называет видимые абзацы, а их положение читалка
-    // измеряет сама, поэтому запас по краям тут не нужен.
-    { threshold: 0 },
-  );
-  for (const node of article.querySelectorAll("[data-block]")) watcher.observe(node);
+  let pending = false;
+  scrolled = (): void => {
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      const now = blockAtTop();
+      if (now === null) return;
+      keeper.moved(now);
+      showProgress(now);
+      showMarkState(now);
+    });
+  };
+  // passive: обработчик не отменяет прокрутку, и браузеру не надо ждать его,
+  // чтобы прокрутить страницу. На телефоне без этого листание дёргается.
+  window.addEventListener("scroll", scrolled, { passive: true });
 }
 
 /**
@@ -202,6 +194,10 @@ function goToBlock(block: number): void {
   open?.keeper.moved(block);
   showProgress(block);
   showMarkState(block);
+  // Прыжок через всю книгу — самое место, где ленивая вёрстка уносит: высоты
+  // всего, что осталось выше, только теперь и уточняются. Держим начало
+  // абзаца, потому что к нему и переходили.
+  holdPlaceAt({ block, part: 0 });
 }
 
 // --- картинки --------------------------------------------------------------
@@ -311,9 +307,7 @@ function redrawBlock(block: number, found?: { start: number; end: number }): voi
   if (!fresh) return;
   if (marked(open.marks, block)) fresh.classList.add("marked");
 
-  watcher?.unobserve(node);
   node.replaceWith(fresh);
-  watcher?.observe(fresh);
   for (const img of fresh.querySelectorAll("img[data-src]")) images?.observe(img);
 }
 
@@ -531,7 +525,9 @@ async function applySize(next: number): Promise<void> {
   size = next;
   document.documentElement.style.setProperty("--text", `${next}rem`);
   showSizeEdges();
-  if (anchor) returnTo(anchor);
+  // Придержка сама возвращает на место — первым же делом и потом ещё
+  // несколько кадров, пока высоты уточняются.
+  if (anchor) holdPlaceAt(anchor);
   await store.saveSettings({ text: next });
 }
 
@@ -559,37 +555,102 @@ function anchorAtTop(): Anchor | null {
 }
 
 /**
- * Возвращает читателя туда же, откуда он смотрел.
+ * Насколько абзац уехал от того места, где его читали.
  *
- * Доля, а не пиксели: крупнее шрифт — выше абзац, и та же доля означает ту же
- * строку, а те же пиксели — уже другую.
+ * Ноль значит «читатель смотрит туда же, куда и смотрел». Пусто — абзаца в
+ * странице нет вовсе.
  */
-function returnTo(anchor: Anchor): void {
+function driftFrom(anchor: Anchor): number | null {
   const node = article.querySelector<HTMLElement>(`[data-block="${anchor.block}"]`);
-  if (!node) return;
+  if (!node) return null;
   const rect = node.getBoundingClientRect();
-  window.scrollBy(0, rect.top - readingTop() - anchor.part * rect.height);
-  open?.keeper.moved(anchor.block);
-  showProgress(anchor.block);
-  showMarkState(anchor.block);
+  return rect.top - readingTop() - anchor.part * rect.height;
+}
+
+/** Идущая сейчас придержка: новая всегда отменяет прежнюю. */
+let holding: Holder | null = null;
+
+/** События, по которым видно, что читатель взялся за книгу сам. */
+const ЧИТАТЕЛЬ_САМ = ["wheel", "touchstart", "pointerdown", "keydown"] as const;
+
+/**
+ * Держит абзац у края, пока страница не устоится.
+ *
+ * Вёрстка ленивая, и высоты абзацев уточняются не сразу: всё, что уточнилось
+ * выше места чтения, уносит читателя. Измерено — 1245 пикселей за две секунды
+ * там, где браузер не придерживает содержимое сам. Chromium придерживает и
+ * изъяна не показывает, Safari — нет, и телефон читателя как раз на нём.
+ *
+ * Поправка идёт в `requestAnimationFrame`, то есть до отрисовки: рывка не
+ * видно. Стоит она пустяк — пять миллисекунд на сотню кадров.
+ *
+ * Как узнаём, что читатель взялся за страницу сам: по его касанию, колесу или
+ * клавише — но только если он трогал книгу, а не панель. Нажатие на «крупнее» —
+ * тоже касание, и уступать ему нельзя: там как раз и надо держать.
+ *
+ * Следить вместо этого за самой прокруткой не вышло, и причина поучительная:
+ * догадка о высоте абзаца завышена, страница по мере уточнения укорачивается, и
+ * браузер сам подтягивает прокрутку к новому концу книги. Со стороны это ничем
+ * не отличается от прокрутки читателем — придержка уступала и бросала его за
+ * триста пикселей от места.
+ */
+function holdPlaceAt(anchor: Anchor): void {
+  // Прежняя придержка уступает: держаться надо за последнее место, а не за то,
+  // откуда читатель уже ушёл.
+  holding?.release();
+  const holder = holdPlace(performance.now());
+  holding = holder;
+
+  const уступить = (event: Event): void => {
+    // Панель — не книга: там кнопки, которыми место как раз и меняют.
+    const where = event.target instanceof Element ? event.target : null;
+    if (where?.closest("#top")) return;
+    holder.release();
+  };
+  for (const событие of ЧИТАТЕЛЬ_САМ) {
+    window.addEventListener(событие, уступить, { passive: true });
+  }
+
+  const кадр = (): void => {
+    const drift = driftFrom(anchor);
+    // Абзаца не стало — книгу закрыли или сменили. Держаться не за что.
+    const what = drift === null ? "хватит" : holder.step(drift, performance.now());
+    if (what === "хватит") {
+      for (const событие of ЧИТАТЕЛЬ_САМ) window.removeEventListener(событие, уступить);
+      if (holding === holder) holding = null;
+      return;
+    }
+    if (what === "поправить") {
+      // Доля, а не пиксели: крупнее шрифт — выше абзац, и та же доля означает
+      // ту же строку, а те же пиксели — уже другую. Долю считает `driftFrom`.
+      window.scrollBy(0, drift!);
+      open?.keeper.moved(anchor.block);
+      showProgress(anchor.block);
+      showMarkState(anchor.block);
+    }
+    requestAnimationFrame(кадр);
+  };
+  requestAnimationFrame(кадр);
 }
 
 /**
  * Какой абзац сейчас у верхнего края — по разметке, а не по памяти.
  *
- * Спрашивать хранителя нельзя: он узнаёт место от наблюдателя, а тот сообщает
- * не сразу. При двух нажатиях подряд ответ оказывается вчерашним, и книга
- * уезжает — измерено, на восемьсот пикселей. Разметка же говорит правду в тот
- * самый миг, когда её спросили.
+ * Спрашивать хранителя нельзя: он узнаёт место от слежения, а оно идёт кадрами.
+ * При двух нажатиях подряд ответ оказывается вчерашним, и книга уезжает —
+ * измерено, на восемьсот пикселей. Разметка же говорит правду в тот самый миг,
+ * когда её спросили.
+ *
+ * Абзацы лежат в странице по порядку, поэтому нужный ищется делением пополам:
+ * тринадцать замеров вместо шести тысяч. Перебор всей книги стоял тут прежде и
+ * был главной частью тех пяти секунд, в которые обходилось одно нажатие
+ * «крупнее».
  */
 function blockAtTop(): number | null {
   const edge = readingTop();
-  return topmost(
-    [...article.querySelectorAll<HTMLElement>("[data-block]")].map((node) => ({
-      block: Number(node.dataset["block"]),
-      top: node.getBoundingClientRect().top - edge,
-    })),
-  );
+  const nodes = article.querySelectorAll<HTMLElement>("[data-block]");
+  const at = searchTop(nodes.length, (index) => nodes[index]!.getBoundingClientRect().top - edge);
+  return at === null ? null : Number(nodes[at]!.dataset["block"]);
 }
 
 /** Гасит кнопку на краю списка: жать её незачем. */
