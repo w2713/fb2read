@@ -31,6 +31,7 @@
         <button type="button" id="toc-toggle">Оглавление</button>
         <button type="button" id="find-toggle">Поиск</button>
         <button type="button" id="marks-toggle">Закладки</button>
+        <button type="button" id="prefs-toggle">Настройки</button>
         <button type="button" id="mark" title="Поставить закладку" aria-label="Поставить закладку">
           ☆
         </button>
@@ -71,6 +72,60 @@
           </form>
           <p id="find-count" class="note-line"></p>
           <ul id="found"></ul>
+        </section>
+
+        <!-- Величины — те же, что в терминале, и клавиши у них те же. Кто
+             читает за столом, настраивает чтение под себя, а не под наши
+             представления о хорошей колонке. -->
+        <section id="prefs" hidden>
+          <div id="prefs-body">
+            <label
+              ><span>Ширина колонки</span>
+              <!-- Заполняется из списка ширин: держать его в двух местах
+                   значит однажды их разойтись. -->
+              <select id="pref-width"></select>
+            </label>
+            <label
+              ><span>Колонки</span>
+              <select id="pref-columns">
+                <option value="1">одна, прокруткой</option>
+                <option value="0">разворот: сколько поместится</option>
+                <option value="2">разворот: две</option>
+                <option value="3">разворот: три</option>
+                <option value="4">разворот: четыре</option>
+              </select>
+            </label>
+            <label
+              ><span>Размер шрифта</span>
+              <select id="pref-text"></select>
+            </label>
+            <label
+              ><span>Межстрочный интервал</span>
+              <select id="pref-spacing">
+                <option value="1">плотный</option>
+                <option value="2">обычный</option>
+                <option value="3">просторный</option>
+              </select>
+            </label>
+            <label
+              ><span>Тема</span>
+              <select id="pref-theme">
+                <option value="auto">как в системе</option>
+                <option value="day">день</option>
+                <option value="sepia">сепия</option>
+                <option value="night">ночь</option>
+              </select>
+            </label>
+            <label class="row">
+              <input id="pref-justify" type="checkbox" />
+              Выключка: ровный правый край
+            </label>
+            <label class="row">
+              <input id="pref-hyphens" type="checkbox" />
+              Переносы по слогам
+            </label>
+          </div>
+          <p id="prefs-note" class="note-line"></p>
         </section>
 
         <section id="marks" hidden>

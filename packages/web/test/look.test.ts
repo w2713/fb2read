@@ -7,7 +7,24 @@
  */
 
 import { describe, expect, it } from "vitest";
-import { DEFAULT_TEXT, TEXT_SIZES, atEdge, stepSize, textSize } from "../src/look.js";
+import {
+  COLUMN_WIDTHS,
+  DEFAULT_COLUMN,
+  DEFAULT_COUNT,
+  DEFAULT_SPACING,
+  DEFAULT_TEXT,
+  TEXT_SIZES,
+  atEdge,
+  columnCount,
+  columnWidth,
+  flagOf,
+  lineHeight,
+  nextSpacing,
+  spacingOf,
+  stepColumn,
+  stepSize,
+  textSize,
+} from "../src/look.js";
 
 describe("размер текста", () => {
   it("шаг ведёт по списку в обе стороны", () => {
@@ -51,5 +68,73 @@ describe("размер текста", () => {
     // Иначе у всех, кто уже читает, текст поехал бы при обновлении.
     expect(DEFAULT_TEXT).toBe(1.125);
     expect(TEXT_SIZES).toContain(DEFAULT_TEXT);
+  });
+});
+
+describe("ширина колонки", () => {
+  it("шаг ведёт по списку и на краях не заворачивается", () => {
+    expect(stepColumn(34, 1)).toBe(38);
+    expect(stepColumn(34, -1)).toBe(30);
+    expect(stepColumn(COLUMN_WIDTHS[COLUMN_WIDTHS.length - 1]!, 1)).toBe(44);
+    expect(stepColumn(COLUMN_WIDTHS[0]!, -1)).toBe(26);
+  });
+
+  it("по умолчанию колонка та же, что была до настройки", () => {
+    // Иначе у всех, кто уже читает, при обновлении съедет вёрстка.
+    expect(columnWidth(undefined)).toBe(34);
+    expect(DEFAULT_COLUMN).toBe(34);
+  });
+
+  it("мусор в настройках притягивается к списку", () => {
+    expect(columnWidth("широкая")).toBe(34);
+    expect(columnWidth(31)).toBe(30);
+    expect(columnWidth(1000)).toBe(44);
+  });
+});
+
+describe("число колонок", () => {
+  it("по умолчанию — сколько поместится", () => {
+    expect(columnCount(undefined)).toBe(0);
+    expect(DEFAULT_COUNT).toBe(0);
+  });
+
+  it("свои числа берутся, чужие — нет", () => {
+    expect(columnCount(3)).toBe(3);
+    // Семь колонок из чужой версии не притягиваются к четырём, а отбрасываются:
+    // «сколько поместится» — ответ, годный для любой записи.
+    expect(columnCount(7)).toBe(0);
+    expect(columnCount(1)).toBe(0);
+  });
+});
+
+describe("межстрочный интервал", () => {
+  it("обычный интервал — тот, которым верстали до настройки", () => {
+    expect(lineHeight(DEFAULT_SPACING)).toBe(1.65);
+    expect(spacingOf(undefined)).toBe(DEFAULT_SPACING);
+  });
+
+  it("интервалы идут по возрастанию", () => {
+    expect(lineHeight(1)).toBeLessThan(lineHeight(2));
+    expect(lineHeight(2)).toBeLessThan(lineHeight(3));
+  });
+
+  it("перебор идёт по кругу — как клавиша s в терминале", () => {
+    expect(nextSpacing(1)).toBe(2);
+    expect(nextSpacing(2)).toBe(3);
+    expect(nextSpacing(3)).toBe(1);
+  });
+});
+
+describe("выключка и переносы", () => {
+  it("чего не было в записи — остаётся как было", () => {
+    // В браузерной читалке выключка и переносы работали с самого начала, и
+    // отсутствие записи значит «как было», а не «выключено».
+    expect(flagOf(undefined, true)).toBe(true);
+    expect(flagOf(null, true)).toBe(true);
+  });
+
+  it("записанный отказ слушается", () => {
+    expect(flagOf(false, true)).toBe(false);
+    expect(flagOf(true, false)).toBe(true);
   });
 });
