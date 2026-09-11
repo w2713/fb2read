@@ -166,6 +166,10 @@ export interface Harness {
   settle(): Promise<void>;
   /** Меняет размер окна и ждёт перерисовки. */
   resize(rows: number, columns: number): Promise<void>;
+  /** Терминал прислал новый размер, но время ещё не пошло: так тянут окно мышью. */
+  dragTo(rows: number, columns: number): void;
+  /** Отпустили: даёт сработать придержке перевёрстки. */
+  letGo(): Promise<void>;
 }
 
 /** Стенд с читалкой. */
@@ -180,7 +184,11 @@ export interface ChooserHarness extends Harness {
   picked(): Promise<string | null>;
 }
 
-function controls(terminal: FakeTerminal, session: Session): Omit<Harness, "terminal" | "session"> {
+function controls(
+  terminal: FakeTerminal,
+  session: Session,
+  clock: Clock,
+): Omit<Harness, "terminal" | "session"> {
   return {
     async press(...sequences: string[]) {
       terminal.send(...sequences);
@@ -194,7 +202,52 @@ function controls(terminal: FakeTerminal, session: Session): Omit<Harness, "term
     },
     async resize(rows: number, columns: number) {
       terminal.resize(rows, columns);
+      clock.run();
       await terminal.drain();
+    },
+    dragTo(rows: number, columns: number) {
+      terminal.resize(rows, columns);
+    },
+    async letGo() {
+      clock.run();
+      await terminal.drain();
+    },
+  };
+}
+
+/**
+ * Часы под управлением проверки.
+ *
+ * Перевёрстка книги при изменении размера окна придержана на восемьдесят
+ * миллисекунд, иначе протяжка окна мышью выбрасывает её на пол на каждый
+ * пиксель. Ждать эти миллисекунды по-настоящему в проверках незачем, а вот
+ * управлять ими нужно: только так видно, что за протяжку перевёрстка случилась
+ * один раз, а не тридцать.
+ */
+interface Clock {
+  schedule: (fn: () => void, ms: number) => unknown;
+  cancel: (id: unknown) => void;
+  /** Выполняет всё отложенное. */
+  run: () => void;
+}
+
+function clockwork(): Clock {
+  const timers = new Map<number, () => void>();
+  let next = 1;
+  return {
+    schedule(fn) {
+      const id = next;
+      next += 1;
+      timers.set(id, fn);
+      return id;
+    },
+    cancel(id) {
+      timers.delete(id as number);
+    },
+    run() {
+      const due = [...timers.values()];
+      timers.clear();
+      for (const fn of due) fn();
     },
   };
 }
@@ -205,7 +258,8 @@ export async function harness(
   size: { rows?: number; columns?: number } = {},
 ): Promise<ReaderHarness> {
   const terminal = new FakeTerminal(size.rows ?? 24, size.columns ?? 80);
-  const session = new Session(terminal);
+  const clock = clockwork();
+  const session = new Session(terminal, clock);
   session.begin(options.mouse);
 
   const reader = createReader(session, { images: "off", ...options });
@@ -213,7 +267,7 @@ export async function harness(
   void session.show(reader).then(() => session.end());
   await terminal.drain();
 
-  return { terminal, session, reader, ...controls(terminal, session) };
+  return { terminal, session, reader, ...controls(terminal, session, clock) };
 }
 
 /** Собирает список книг поверх поддельного терминала. */
@@ -229,7 +283,8 @@ export async function libraryHarness(
   } = {},
 ): Promise<ChooserHarness> {
   const terminal = new FakeTerminal(options.rows ?? 24, options.columns ?? 80);
-  const session = new Session(terminal);
+  const clock = clockwork();
+  const session = new Session(terminal, clock);
   session.begin(options.mouse ?? true);
   const chooser = new Chooser(entries, new Theme(options.theme ?? "night"), options.mouse ?? true, {
     ...(options.onSync ? { onSync: options.onSync } : {}),
@@ -247,6 +302,6 @@ export async function libraryHarness(
     session,
     chooser,
     picked: () => shown,
-    ...controls(terminal, session),
+    ...controls(terminal, session, clock),
   };
 }

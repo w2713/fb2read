@@ -6,7 +6,7 @@
  * перестроилось при изменении размера окна.
  */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { harness, type ReaderHarness } from "./harness.js";
 import { sampleBook, wideBook } from "./books.js";
 
@@ -172,6 +172,23 @@ describe("изменение размера окна", () => {
     const narrow = ui.terminal.line(2);
     expect(narrow).not.toBe(wide);
     for (const line of ui.terminal.lines()) expect(line.length).toBeLessThanOrEqual(46);
+  });
+
+  it("протяжка окна мышью верстает книгу один раз, а не на каждый пиксель", async () => {
+    // Терминал шлёт SIGWINCH на каждое знакоместо протяжки, а перевёрстка
+    // книги в шесть тысяч абзацев стоит около 140 мс — измерено. Без придержки
+    // протяжка на тридцать знакомест означала бы четыре секунды, в которые
+    // читалка не отвечает вовсе.
+    ui = await open({ columns: 100 });
+    const заново = vi.spyOn(ui.reader, "setSize");
+
+    for (let columns = 99; columns >= 70; columns -= 1) ui.dragTo(24, columns);
+    expect(заново).not.toHaveBeenCalled();
+
+    await ui.letGo();
+    expect(заново).toHaveBeenCalledTimes(1);
+    // И верстает под тот размер, на котором окно отпустили, а не под первый.
+    expect(заново).toHaveBeenLastCalledWith(24, 70);
   });
 
   it("после сужения и возврата книга остаётся на том же месте", async () => {
