@@ -31,6 +31,7 @@ export interface LibraryPrefs {
   images: ImageBackend;
   mouse: boolean;
   justify: boolean;
+  hyphens: boolean;
   width: number;
   keys: Record<string, string>;
 }
@@ -164,6 +165,7 @@ export async function runLibrary(
         imagesOff: prefs.images === "off",
         mouse: prefs.mouse,
         justify: prefs.justify,
+        hyphens: prefs.hyphens,
         keys: prefs.keys,
         bookmarks,
         ...(options.version ? { version: options.version } : {}),
@@ -208,12 +210,14 @@ export async function runLibrary(
       prefs.columns = result.reader.columns;
       prefs.mouse = result.reader.mouse;
       prefs.justify = result.reader.justify;
+      prefs.hyphens = result.reader.hyphens;
       await store.saveSettings({
         theme: prefs.theme,
         spacing: prefs.spacing,
         columns: prefs.columns,
         mouse: prefs.mouse,
         justify: prefs.justify,
+        hyphens: prefs.hyphens,
       });
 
       // Список общий на весь цикл, поэтому обновлённый процент виден сразу

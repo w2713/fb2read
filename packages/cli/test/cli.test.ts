@@ -115,6 +115,15 @@ describe.skipIf(!built)("собранная программа", () => {
     for (const n of ровно) expect(n).toBeLessThanOrEqual(40);
   });
 
+  it("--hyphens переносит слова, а без него переносов нет", () => {
+    const строки = (args: string[]) =>
+      run(длинная, "--dump", "-w", "30", ...args).stdout.split("\n");
+
+    expect(строки([]).some((line) => line.trimEnd().endsWith("-"))).toBe(false);
+    expect(строки(["--hyphens"]).some((line) => line.trimEnd().endsWith("-"))).toBe(true);
+    for (const line of строки(["--hyphens"])) expect(line.length).toBeLessThanOrEqual(30);
+  });
+
   it("переживает обрыв конвейера", () => {
     // head закрывает трубу на первой странице — это обычный конец работы,
     // а не ошибка: код возврата должен быть нулевым и без крика в stderr.

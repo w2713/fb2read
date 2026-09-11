@@ -52,6 +52,7 @@ interface Prefs {
   images: ImageBackend;
   mouse: boolean;
   justify: boolean;
+  hyphens: boolean;
   width: number;
   keys: Record<string, string>;
 }
@@ -164,6 +165,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     images: choose(args.images, config.prefs.images, undefined, "auto"),
     mouse: choose(args.mouse, config.prefs.mouse, settings.mouse, true),
     justify: choose(args.justify, config.prefs.justify, settings.justify as boolean, false),
+    hyphens: choose(args.hyphens, config.prefs.hyphens, settings.hyphens as boolean, false),
     width: choose(args.width, config.prefs.width, undefined, 80),
     keys: config.keys,
   };
@@ -270,6 +272,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       columns: after.columns,
       mouse: after.mouse,
       justify: after.justify,
+      hyphens: after.hyphens,
     });
     return 0;
   }
@@ -302,7 +305,10 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
 
   if (args.dump) {
     return printLines(
-      layout(book.blocks, prefs.width, prefs.spacing, { justify: prefs.justify }).map((l) => l.text),
+      layout(book.blocks, prefs.width, prefs.spacing, {
+        justify: prefs.justify,
+        hyphens: prefs.hyphens,
+      }).map((l) => l.text),
     );
   }
 
@@ -369,6 +375,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       imagesOff: prefs.images === "off",
       mouse: prefs.mouse,
       justify: prefs.justify,
+      hyphens: prefs.hyphens,
       keys: prefs.keys,
       bookmarks,
       notice: syncNote,

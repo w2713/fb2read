@@ -53,17 +53,24 @@ function lineStyles(
   chunk: string,
   offset: number,
   column: number,
+  cut = false,
 ): LineStyle[] {
   if (!spans.length) return [];
   const start = base + offset;
-  const end = start + chunk.length;
+  // При переносе в конце дописан дефис, которого в книге нет: исходный кусок
+  // на знак короче текста. Не учесть этого — значит затянуть в отрезок лишнюю
+  // букву со следующей строки.
+  const end = start + chunk.length - (cut ? 1 : 0);
   const out: LineStyle[] = [];
   for (const [spanStart, spanEnd, kind] of spans) {
     const lo = Math.max(spanStart, start);
     const hi = Math.min(spanEnd, end);
     if (lo >= hi) continue;
     const at = lo - start;
-    const fragment = chunk.slice(at, hi - start);
+    // Дефис достаётся тому же начертанию, что и разорванное слово: курсив,
+    // оборванный прямым дефисом, выглядит опечаткой.
+    const upto = hi - start + (cut && hi === end ? 1 : 0);
+    const fragment = chunk.slice(at, upto);
     if (fragment.trim()) out.push([column + strWidth(chunk.slice(0, at)), fragment, kind]);
   }
   return out;
@@ -73,6 +80,8 @@ function lineStyles(
 export interface Look {
   /** Выключка по формату: ровный правый край. */
   justify?: boolean;
+  /** Перенос слов по слогам. */
+  hyphens?: boolean;
 }
 
 /**
@@ -113,23 +122,28 @@ export function layout(
         continue;
       }
       if (st.center) {
-        const chunks = wrapWords(para, columnWidth);
-        for (const [chunk, offset] of chunks.length ? chunks : [["", 0] as const]) {
+        const chunks = wrapWords(para, columnWidth, undefined, look.hyphens);
+        for (const [chunk, offset, cut] of chunks.length ? chunks : [["", 0] as const]) {
           const pad = Math.max(Math.floor((columnWidth - strWidth(chunk)) / 2), 0);
           out.push({
             text: " ".repeat(pad) + chunk,
             attr: st.attr,
             block: i,
-            styles: lineStyles(b.spans, base, chunk, offset, pad),
+            styles: lineStyles(b.spans, base, chunk, offset, pad, cut),
           });
         }
       } else {
-        const wrapped = wrapWords(para, columnWidth - st.indent, columnWidth - st.first);
+        const wrapped = wrapWords(
+          para,
+          columnWidth - st.indent,
+          columnWidth - st.first,
+          look.hyphens,
+        );
         const chunks = wrapped.length ? wrapped : [["", 0] as const];
-        chunks.forEach(([chunk, offset], n) => {
+        chunks.forEach(([chunk, offset, cut], n) => {
           const pad = n === 0 ? st.first : st.indent;
           const text = " ".repeat(pad) + chunk;
-          const styles = lineStyles(b.spans, base, chunk, offset, pad);
+          const styles = lineStyles(b.spans, base, chunk, offset, pad, cut);
           // Последнюю строку абзаца не выключают: иначе конец главы вышел бы
           // строкой из трёх слов, растянутой во всю ширину. Стихи не выключают
           // тоже — там ровный правый край не нужен и мешает.

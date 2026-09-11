@@ -58,6 +58,8 @@ export interface ReaderOptions {
   mouse: boolean;
   /** Выключка по формату. Необязательна и по умолчанию выключена. */
   justify?: boolean;
+  /** Переносы по слогам. Тоже по умолчанию выключены. */
+  hyphens?: boolean;
   keys?: Record<string, string>;
   bookmarks?: Bookmark[];
   path?: string;
@@ -110,6 +112,7 @@ export class Reader {
   columns: number;
   mouse: boolean;
   justify: boolean;
+  hyphens: boolean;
   maxWidth: number;
   top = 0;
   message = "";
@@ -142,6 +145,7 @@ export class Reader {
     this.columns = options.columns === 2 ? 2 : 1;
     this.mouse = options.mouse;
     this.justify = options.justify ?? false;
+    this.hyphens = options.hyphens ?? false;
     this.theme = new Theme(THEME_ORDER.includes(options.theme) ? options.theme : "auto");
     this.bookmarks = options.bookmarks ?? [];
     this.markedBlocks = new Set(this.liveMarks.map((m) => m.block));
@@ -206,10 +210,13 @@ export class Reader {
       this.margin = Math.max(Math.floor((cols - this.width) / 2), 0);
     }
 
-    const key = `${this.width}:${this.spacing}:${this.justify ? "ж" : "-"}`;
+    const key = `${this.width}:${this.spacing}:${this.justify ? "ж" : "-"}${this.hyphens ? "п" : "-"}`;
     let cached = this.cache.get(key);
     if (!cached) {
-      cached = layout(this.book.blocks, this.width, this.spacing, { justify: this.justify });
+      cached = layout(this.book.blocks, this.width, this.spacing, {
+        justify: this.justify,
+        hyphens: this.hyphens,
+      });
       // Держим только свежие раскладки: книга на сотню тысяч строк в шести
       // экземплярах — это уже заметная память.
       if (this.cache.size >= 6) this.cache.delete(this.cache.keys().next().value!);
@@ -543,6 +550,9 @@ export class Reader {
       case "justify":
         this.toggleJustify();
         break;
+      case "hyphens":
+        this.toggleHyphens();
+        break;
       case "mouse":
         this.toggleMouse();
         break;
@@ -591,6 +601,13 @@ export class Reader {
     this.theme = new Theme(THEME_ORDER[next]!);
     this.needsFullRedraw = true;
     this.message = `тема: ${this.theme.name}`;
+  }
+
+  private toggleHyphens(): void {
+    const block = this.currentBlock();
+    this.hyphens = !this.hyphens;
+    this.relayout(block);
+    this.message = this.hyphens ? "слова переносятся по слогам" : "слова не переносятся";
   }
 
   private toggleJustify(): void {

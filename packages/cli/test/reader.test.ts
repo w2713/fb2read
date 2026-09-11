@@ -226,6 +226,21 @@ describe("выключка", () => {
     expect(края()).toEqual(было);
   });
 
+  it("клавиша H переносит слова, и она же возвращает как было", async () => {
+    ui = await open({ columns: 30 });
+    const переносы = () =>
+      ui.terminal
+        .lines()
+        .slice(1, -1)
+        .filter((line) => line.trimEnd().endsWith("-")).length;
+
+    expect(переносы()).toBe(0);
+    await ui.press("H");
+    expect(переносы()).toBeGreaterThan(0);
+    await ui.press("H");
+    expect(переносы()).toBe(0);
+  });
+
   it("курсив остаётся на своём слове и после выключки", async () => {
     // Отрезок начертания хранит колонку и текст; вставка пробелов двигает оба.
     // Без пересчёта курсив лёг бы на соседние буквы — это и стережётся здесь.
