@@ -201,6 +201,46 @@ describe("изменение размера окна", () => {
   });
 });
 
+describe("выключка", () => {
+  it("клавиша равняет правый край, и она же возвращает его обратно", async () => {
+    // Ширина нарочно узкая: у образца абзацы короткие, и в широкой колонке
+    // они не переносятся вовсе — выключке было бы нечего делать.
+    ui = await open({ columns: 34 });
+    // Правый край меряется по самой длинной строке, а не числом: к колонке на
+    // экране добавляется поле по краям, и его ширина здесь ни при чём.
+    const края = () =>
+      ui.terminal
+        .lines()
+        // Без первой и последней: шапка и строка состояния тянутся во всю
+        // ширину окна и оказались бы длиннее любой строки книги.
+        .slice(1, -1)
+        .map((line) => line.replace(/\s+$/u, "").length)
+        .filter((n) => n > 20);
+    const полных = (list: number[]) => list.filter((n) => n === Math.max(...list)).length;
+
+    const было = края();
+    await ui.press("J");
+    expect(полных(края())).toBeGreaterThan(полных(было));
+
+    await ui.press("J");
+    expect(края()).toEqual(было);
+  });
+
+  it("курсив остаётся на своём слове и после выключки", async () => {
+    // Отрезок начертания хранит колонку и текст; вставка пробелов двигает оба.
+    // Без пересчёта курсив лёг бы на соседние буквы — это и стережётся здесь.
+    ui = await open({ columns: 34 });
+    await ui.press("J");
+    const row = ui.terminal.findRow("курсивом");
+    expect(row).toBeGreaterThan(0);
+    const at = ui.terminal.line(row).indexOf("курсивом");
+    expect(at).toBeGreaterThanOrEqual(0);
+    expect(ui.terminal.style(row, at + 2).italic).toBe(true);
+    // И сразу перед словом курсива быть не должно — иначе он съехал влево.
+    expect(ui.terminal.style(row, at - 2).italic).toBe(false);
+  });
+});
+
 describe("начертание", () => {
   it("курсив и полужирный доходят до экрана", async () => {
     ui = await open();

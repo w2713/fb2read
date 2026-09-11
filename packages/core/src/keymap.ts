@@ -50,6 +50,7 @@ export const ACTIONS: readonly ActionSpec[] = [
   { action: "wider", text: "шире колонка", keys: ["+", "="] },
   { action: "narrower", text: "уже колонка", keys: ["-"] },
   { action: "spacing", text: "межстрочный интервал (1 / 2 / 3)", keys: ["s"] },
+  { action: "justify", text: "выключка по формату: ровный правый край", keys: ["J"] },
   { action: "one_column", text: "одна колонка", keys: ["1"] },
   { action: "two_columns", text: "книжный разворот", keys: ["2"] },
   { action: "toggle_columns", text: "переключить разворот", keys: ["v"] },

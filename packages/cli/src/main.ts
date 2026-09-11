@@ -51,6 +51,7 @@ interface Prefs {
   columns: number;
   images: ImageBackend;
   mouse: boolean;
+  justify: boolean;
   width: number;
   keys: Record<string, string>;
 }
@@ -162,6 +163,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     columns: choose(args.columns, config.prefs.columns, settings.columns, 1),
     images: choose(args.images, config.prefs.images, undefined, "auto"),
     mouse: choose(args.mouse, config.prefs.mouse, settings.mouse, true),
+    justify: choose(args.justify, config.prefs.justify, settings.justify as boolean, false),
     width: choose(args.width, config.prefs.width, undefined, 80),
     keys: config.keys,
   };
@@ -267,6 +269,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       spacing: after.spacing,
       columns: after.columns,
       mouse: after.mouse,
+      justify: after.justify,
     });
     return 0;
   }
@@ -298,7 +301,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
   }
 
   if (args.dump) {
-    return printLines(layout(book.blocks, prefs.width, prefs.spacing).map((l) => l.text));
+    return printLines(
+      layout(book.blocks, prefs.width, prefs.spacing, { justify: prefs.justify }).map((l) => l.text),
+    );
   }
 
   if (!process.stdout.isTTY) {
@@ -363,6 +368,7 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
       images: prefs.images,
       imagesOff: prefs.images === "off",
       mouse: prefs.mouse,
+      justify: prefs.justify,
       keys: prefs.keys,
       bookmarks,
       notice: syncNote,
