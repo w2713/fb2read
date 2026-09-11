@@ -30,10 +30,35 @@ const BOOK =
   Array.from({ length: 400 }, (_, i) => `<p>Абзац номер ${i} с текстом.</p>`).join("") +
   "</section></body></FictionBook>";
 
+/**
+ * Книга с длинными абзацами.
+ *
+ * У основного образца абзацы короче колонки, поэтому они не переносятся вовсе,
+ * каждая строка оказывается последней в своём абзаце — а последнюю выключка не
+ * трогает. На нём проверка выключки прошла бы вхолостую.
+ */
+const ДЛИННАЯ =
+  '<?xml version="1.0" encoding="utf-8"?>' +
+  '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">' +
+  "<description><title-info><book-title>Длинная</book-title>" +
+  "</title-info></description><body><section><title><p>Глава</p></title>" +
+  Array.from(
+    { length: 30 },
+    (_, i) =>
+      `<p>Абзац номер ${i}, и в нём достаточно слов, чтобы он не уместился ` +
+      "в одну строку узкой колонки, а перенёсся на несколько строк подряд " +
+      "и дал выключке хоть какую-то работу над промежутками.</p>",
+  ).join("") +
+  "</section></body></FictionBook>";
+
+let длинная: string;
+
 beforeAll(() => {
   dir = mkdtempSync(join(tmpdir(), "fb2read-cli-"));
   book = join(dir, "книга.fb2");
   writeFileSync(book, BOOK, "utf-8");
+  длинная = join(dir, "длинная.fb2");
+  writeFileSync(длинная, ДЛИННАЯ, "utf-8");
 });
 
 afterAll(() => {
@@ -71,6 +96,32 @@ describe.skipIf(!built)("собранная программа", () => {
     for (const line of run(book, "--dump", "-w", "40").stdout.split("\n")) {
       expect(line.length).toBeLessThanOrEqual(40);
     }
+  });
+
+  it("--justify равняет правый край, а без него он неровный", () => {
+    // Умолчание сверяется с эталонной реализацией побайтно (diff-dump.sh),
+    // поэтому выключка обязана быть только по просьбе.
+    const ширины = (args: string[]) =>
+      run(длинная, "--dump", "-w", "40", ...args)
+        .stdout.split("\n")
+        .filter((line) => line.trim().length > 30)
+        .map((line) => line.length);
+
+    const обычно = ширины([]);
+    const ровно = ширины(["--justify"]);
+    expect(обычно.length).toBeGreaterThan(2);
+    expect(обычно.every((n) => n === 40)).toBe(false);
+    expect(ровно.filter((n) => n === 40).length).toBeGreaterThan(обычно.filter((n) => n === 40).length);
+    for (const n of ровно) expect(n).toBeLessThanOrEqual(40);
+  });
+
+  it("--hyphens переносит слова, а без него переносов нет", () => {
+    const строки = (args: string[]) =>
+      run(длинная, "--dump", "-w", "30", ...args).stdout.split("\n");
+
+    expect(строки([]).some((line) => line.trimEnd().endsWith("-"))).toBe(false);
+    expect(строки(["--hyphens"]).some((line) => line.trimEnd().endsWith("-"))).toBe(true);
+    for (const line of строки(["--hyphens"])) expect(line.length).toBeLessThanOrEqual(30);
   });
 
   it("переживает обрыв конвейера", () => {

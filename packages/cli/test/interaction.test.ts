@@ -9,7 +9,59 @@
 import { describe, expect, it } from "vitest";
 import type { Bookmark } from "@fb2read/core";
 import { harness, type ReaderHarness } from "./harness.js";
+import { Book, MemorySource } from "@fb2read/core";
 import { epubBook, sampleBook } from "./books.js";
+
+/**
+ * Книга из одного длинного абзаца, с искомой парой слов ближе к концу.
+ *
+ * Нужна, чтобы совпадение оказалось за нижним краем экрана: только тогда
+ * проверяется, что читалка нашла нужную строку и подкрутила к ней. На книге,
+ * где совпадение и так видно, эта часть не работает вовсе.
+ */
+/**
+ * Книга со сноской, чей маркер состоит из нескольких слов.
+ *
+ * «[прим. ред.]» — маркер с пробелом внутри, и на выключенной строке этот
+ * пробел расходится вместе с остальными. Искать маркер в готовой строке
+ * обычным поиском подстроки тогда бесполезно: он там другой.
+ */
+const сноскаИзДвухСлов = (): Promise<Book> => {
+  const длинное = "х".repeat(28);
+  const xml =
+    '<?xml version="1.0" encoding="utf-8"?>' +
+    '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" ' +
+    'xmlns:l="http://www.w3.org/1999/xlink">' +
+    "<description><title-info><book-title>Со сноской</book-title>" +
+    "</title-info></description><body><section><title><p>Глава</p></title>" +
+    `<p>${длинное} <a l:href="#n1" type="note">[прим. ред.]</a> ${длинное} хвост абзаца</p>` +
+    // Набивка, чтобы примечания ушли за нижний край: иначе их текст виден и
+    // без всякого клика, и проверка ничего не стережёт. Поймано мутацией.
+    Array.from({ length: 40 }, (_, i) => `<p>Набивка ${i}.</p>`).join("") +
+    "</section></body>" +
+    '<body name="notes"><section id="n1"><title><p>прим. ред.</p></title>' +
+    "<p>Текст примечания.</p></section></body></FictionBook>";
+  return Book.open(new MemorySource("note.fb2", new TextEncoder().encode(xml)));
+};
+
+const длинныйАбзац = (): Promise<Book> => {
+  // Длинное слово не помещается рядом с короткими, поэтому «конец пути»
+  // занимает строку вдвоём и промежуток между ними расходится на два десятка
+  // пробелов. Без этого фраза попала бы в последнюю строку абзаца, а её
+  // выключка не трогает — и проверка прошла бы вхолостую.
+  const длинное = "х".repeat(28);
+  const куски: string[] = [];
+  for (let i = 0; i < 14; i += 1) куски.push(длинное, `слово${i}`, `ещё${i}`);
+  куски.push(длинное, "конец", "пути", длинное, "хвост", "абзаца");
+  const xml =
+    '<?xml version="1.0" encoding="utf-8"?>' +
+    '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">' +
+    "<description><title-info><book-title>Длинная</book-title>" +
+    "</title-info></description><body><section><title><p>Глава</p></title>" +
+    `<p>${куски.join(" ")}</p>` +
+    "</section></body></FictionBook>";
+  return Book.open(new MemorySource("long.fb2", new TextEncoder().encode(xml)));
+};
 
 const OPTIONS = {
   width: 60,
@@ -117,6 +169,51 @@ describe("поиск", () => {
     expect(row).toBeGreaterThan(0);
     const at = ui.terminal.line(row).indexOf("ключесловом");
     expect(ui.terminal.style(row, at).inverse).toBe(true);
+  });
+
+  it("запрос из нескольких слов подсвечивается и на выключенной строке", async () => {
+    // Выключка расширяет промежутки: в книге «Абзац с курсивом», а на экране
+    // «Абзац    с    курсивом». Подсветка искала запрос в готовой строке
+    // обычным поиском подстроки и переставала находить его вовсе. Отсюда
+    // сжатие пробелов: ищем по сжатому, рисуем по настоящим местам.
+    // Размер окна — второй довод: первый уходит в настройки читалки.
+    const ui = await open({}, { columns: 34 });
+    await ui.press("J");
+    await ui.press("/", "Абзац с курсивом", "\r");
+
+    const row = ui.terminal.findRow("курсивом");
+    expect(row).toBeGreaterThan(0);
+    const line = ui.terminal.line(row);
+    expect(line).toContain("Абзац    с");
+    expect(ui.terminal.style(row, line.indexOf("Абзац")).inverse).toBe(true);
+    expect(ui.terminal.style(row, line.indexOf("курсивом")).inverse).toBe(true);
+  });
+
+  it("переход к совпадению находит нужную строку и на выключенной", async () => {
+    // Читалка выбирает строку, к которой подкрутить, поиском подстроки в
+    // готовой строке. На выключенной строке запрос из двух слов там не
+    // находится, и читатель оставался бы в начале абзаца — за экран от
+    // найденного.
+    const ui = await harness({ book: await длинныйАбзац(), ...OPTIONS }, { columns: 34 });
+    await ui.press("J");
+    await ui.press("/", "конец пути", "\r");
+    expect(ui.terminal.findRow("конец")).toBeGreaterThan(0);
+  });
+
+  it("маркер сноски из двух слов остаётся кликабельным и на выключенной", async () => {
+    // Маркер ищется в готовой строке, а выключка раздвинула пробел внутри
+    // него. Без сжатия сноска перестала бы и подсвечиваться, и открываться.
+    const ui = await harness({ book: await сноскаИзДвухСлов(), ...OPTIONS }, { columns: 34 });
+    await ui.press("J");
+    const row = ui.terminal.findRow("прим.");
+    expect(row).toBeGreaterThan(0);
+    // Пробел внутри маркера и правда разошёлся — иначе проверка ни о чём.
+    expect(ui.terminal.line(row)).toMatch(/\[прим\. {2,}ред\.\]/u);
+
+    // Клик по маркеру открывает сноску: значит, и хотспот встал на место.
+    ui.terminal.click(ui.terminal.line(row).indexOf("[прим."), row);
+    await ui.press("");
+    expect(ui.terminal.text()).toContain("Текст примечания");
   });
 
   it("подсвечены все совпадения на экране и ничего лишнего", async () => {

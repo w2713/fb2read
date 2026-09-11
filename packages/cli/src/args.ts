@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { IMAGE_BACKENDS, THEME_ORDER, type ImageBackend, type Theme } from "@fb2read/core";
 
 export const APP = "fb2read";
-export const VERSION = "0.19.0";
+export const VERSION = "0.20.0";
 
 /** Команды синхронизации: первое слово, а не ключ. */
 export const COMMANDS = ["sync", "push", "pull", "remote", "forget"] as const;
@@ -27,6 +27,8 @@ export interface Args {
   theme?: Theme;
   images?: ImageBackend;
   mouse?: boolean;
+  justify?: boolean;
+  hyphens?: boolean;
   config?: string;
   dump: boolean;
   toc: boolean;
@@ -69,6 +71,8 @@ export const HELP = `${APP} ${VERSION}
       --theme ТЕМА      ${THEME_ORDER.join(", ")}
       --images СПОСОБ   ${IMAGE_BACKENDS.join(", ")}
       --no-mouse        не захватывать мышь
+      --justify         выключка по формату: ровный правый край
+      --hyphens         переносить слова по слогам
       --from-start      не восстанавливать сохранённую позицию
       --all             для pull — скачать все книги с сервера;
                         для push — выгрузить всю библиотеку
@@ -120,6 +124,8 @@ export function parseCliArgs(argv: string[]): Args {
         theme: { type: "string" },
         images: { type: "string" },
         "no-mouse": { type: "boolean" },
+        justify: { type: "boolean" },
+        hyphens: { type: "boolean" },
         "from-start": { type: "boolean" },
         all: { type: "boolean" },
         config: { type: "string" },
@@ -159,6 +165,8 @@ export function parseCliArgs(argv: string[]): Args {
     theme: oneOf("--theme", v.theme, THEME_ORDER),
     images: oneOf("--images", v.images, IMAGE_BACKENDS),
     mouse: v["no-mouse"] ? false : undefined,
+    justify: v["justify"] ? true : undefined,
+    hyphens: v["hyphens"] ? true : undefined,
     config: v.config,
     dump: !!v.dump,
     toc: !!v.toc,

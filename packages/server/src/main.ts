@@ -7,7 +7,7 @@
 
 import { createServer, parseTokens } from "./server.js";
 
-export const VERSION = "0.19.0";
+export const VERSION = "0.20.0";
 
 const HELP = `Использование: fb2read-server
 

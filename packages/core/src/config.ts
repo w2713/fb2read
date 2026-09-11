@@ -25,6 +25,10 @@ export interface Prefs {
   theme?: Theme;
   images?: ImageBackend;
   mouse?: boolean;
+  /** Выключка по формату: ровный правый край колонки. */
+  justify?: boolean;
+  /** Перенос слов по слогам. */
+  hyphens?: boolean;
 }
 
 /** Разобранные секции ini: имя секции в пары ключ-значение. */
@@ -115,11 +119,14 @@ export function readConfig(text: string): ConfigResult {
       notes.push(`в конфиге неизвестное значение images=${value}`);
     }
   }
-  if ("mouse" in reader) {
-    const value = reader["mouse"]!.trim().toLowerCase();
-    if (TRUE.has(value)) prefs.mouse = true;
-    else if (FALSE.has(value)) prefs.mouse = false;
-    else notes.push("в конфиге mouse должно быть yes или no");
+  // Двух булевых настроек хватило, чтобы завести общий цикл: третья ляжет
+  // сюда же, а не отдельной веткой с той же разницей в одном слове.
+  for (const name of ["mouse", "justify", "hyphens"] as const) {
+    if (!(name in reader)) continue;
+    const value = reader[name]!.trim().toLowerCase();
+    if (TRUE.has(value)) prefs[name] = true;
+    else if (FALSE.has(value)) prefs[name] = false;
+    else notes.push(`в конфиге ${name} должно быть yes или no`);
   }
 
   const sync: SyncPrefs = {};
@@ -150,6 +157,8 @@ export function configSample(): string {
 # theme = auto        auto, night, sepia, day
 # images = auto       auto, kitty, iterm, chafa, sixel, off
 # mouse = yes         захватывать ли мышь
+# justify = no        выключка по формату: ровный правый край
+# hyphens = no        переносить слова по слогам
 
 [sync]
 # Синхронизация книг и позиции чтения со своим сервером.
