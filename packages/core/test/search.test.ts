@@ -1,7 +1,7 @@
 /** Поиск: приведение к общему виду, все совпадения, контекст. */
 
 import { describe, expect, it } from "vitest";
-import { findMatches, matchContext, normalize } from "../src/search.js";
+import { findMatches, matchContext, normalize, squeeze } from "../src/search.js";
 import { bigBookParsed, bookFromBody, sampleBook } from "./fixtures.js";
 
 describe("приведение текста", () => {
@@ -50,5 +50,37 @@ describe("поиск", () => {
     const context = matchContext(blocks[block]!, offset, 64);
     expect(normalize(context)).toContain("память");
     expect(context.length).toBeLessThan(blocks[block]!.text.length + 4);
+  });
+});
+
+describe("сжатие пробелов", () => {
+  it("подряд идущие пробелы становятся одним", () => {
+    expect(squeeze("а   б").text).toBe("а б");
+  });
+
+  it("по сжатому месту находится исходное", () => {
+    // Ради этого всё и заведено: найти в сжатом, а подсветить в настоящем.
+    const тесно = squeeze("аб    вг");
+    const at = тесно.text.indexOf("аб вг");
+    expect(at).toBe(0);
+    expect("аб    вг".slice(тесно.at[at]!, тесно.at[at + 5]!)).toBe("аб    вг");
+  });
+
+  it("текст без лишних пробелов не меняется", () => {
+    const было = "аб вг де";
+    const тесно = squeeze(было);
+    expect(тесно.text).toBe(было);
+    expect(тесно.at).toHaveLength(было.length + 1);
+  });
+
+  it("неразрывный пробел не схлопывается", () => {
+    // Его ставят нарочно, и выключка его не трогает — значит, и тут не надо.
+    expect(squeeze("аб\u00A0\u00A0вг").text).toBe("аб\u00A0\u00A0вг");
+  });
+
+  it("конец текста тоже отображается", () => {
+    // Последнее число нужно, чтобы у совпадения в конце строки был конец.
+    const тесно = squeeze("а  б");
+    expect(тесно.at[тесно.text.length]).toBe(4);
   });
 });

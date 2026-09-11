@@ -16,6 +16,7 @@ import {
   layout,
   matchContext,
   normalize,
+  squeeze,
   progressPercent,
   strWidth,
   type Block,
@@ -335,12 +336,16 @@ export class Reader {
   /** Подсвечивает то, что сейчас ищут. */
   private markQuery(screen: Screen, row: number, x0: number, text: string, cols: number): void {
     if (!this.query || !this.matches.length) return;
-    const needle = normalize(this.query);
-    const hay = normalize(text);
+    // Ищем по сжатому, рисуем по настоящим местам: выключка расширяет
+    // промежутки, и запрос из двух слов иначе не совпал бы со строкой вовсе.
+    const needle = normalize(squeeze(this.query).text);
+    const тесно = squeeze(text);
+    const hay = normalize(тесно.text);
     let at = hay.indexOf(needle);
     while (at >= 0) {
-      const x = x0 + strWidth(text.slice(0, at));
-      const fragment = text.slice(at, at + needle.length);
+      const from = тесно.at[at]!;
+      const x = x0 + strWidth(text.slice(0, from));
+      const fragment = text.slice(from, тесно.at[at + needle.length]!);
       if (x >= 0 && x < cols - 1) {
         screen.put(row, x, cutToWidth(fragment, cols - x - 1), this.theme.match);
       }
@@ -361,20 +366,26 @@ export class Reader {
     if (!refs.length) return;
     for (const [marker, target] of refs) {
       if (!(target in this.book.anchors)) continue;
-      let pos = text.indexOf(marker);
+      // Маркер бывает из нескольких слов — «[прим. ред.]», — и на выключенной
+      // строке промежуток внутри него разошёлся бы. Ищем по сжатому.
+      const тесно = squeeze(text);
+      const короткий = squeeze(marker).text;
+      let pos = тесно.text.indexOf(короткий);
       while (pos >= 0) {
-        const x = x0 + strWidth(text.slice(0, pos));
+        const from = тесно.at[pos]!;
+        const видимый = text.slice(from, тесно.at[pos + короткий.length]!);
+        const x = x0 + strWidth(text.slice(0, from));
         if (x >= 0 && x < cols - 1) {
-          screen.put(row, x, cutToWidth(marker, cols - x - 1), this.theme.note);
+          screen.put(row, x, cutToWidth(видимый, cols - x - 1), this.theme.note);
           this.hotspots.push({
             row,
             left: x,
-            right: x + strWidth(marker),
+            right: x + strWidth(видимый),
             kind: "note",
             target,
           });
         }
-        pos = text.indexOf(marker, pos + marker.length);
+        pos = тесно.text.indexOf(короткий, pos + короткий.length);
       }
     }
   }
@@ -775,11 +786,11 @@ export class Reader {
     this.matchIndex = index % this.matches.length;
     const { block } = this.matches[this.matchIndex]!;
     this.goToBlock(block);
-    const needle = normalize(this.query);
+    const needle = normalize(squeeze(this.query).text);
     for (let i = this.top; i < this.lines.length; i++) {
       const line = this.lines[i]!;
       if (line.block > block) break;
-      if (line.block === block && normalize(line.text).includes(needle)) {
+      if (line.block === block && normalize(squeeze(line.text).text).includes(needle)) {
         this.top = Math.max(i - Math.floor(this.height / 3), 0);
         break;
       }

@@ -26,6 +26,36 @@ export function normalize(text: string): string {
   return out.replaceAll("ё", "е");
 }
 
+/** Текст со схлопнутыми пробелами и путь обратно к исходным местам. */
+export interface Squeezed {
+  text: string;
+  /** Где стоит в исходном тексте i-й символ сжатого; длиннее текста на единицу. */
+  at: number[];
+}
+
+/**
+ * Схлопывает подряд идущие пробелы, помня, откуда каждый символ.
+ *
+ * Нужно из-за выключки: она расширяет промежутки между словами, и запрос из
+ * двух слов перестаёт совпадать с готовой строкой — в ней между ними теперь
+ * несколько пробелов. Искать по сжатому, а подсвечивать по настоящим местам —
+ * и запрос находится, и подсветка ложится куда надо.
+ *
+ * Схлопывается только обычный пробел: неразрывный поставлен нарочно, и
+ * выключка его не трогает.
+ */
+export function squeeze(text: string): Squeezed {
+  let out = "";
+  const at: number[] = [];
+  for (let i = 0; i < text.length; i += 1) {
+    at.push(i);
+    out += text[i];
+    if (text[i] === " ") while (text[i + 1] === " ") i += 1;
+  }
+  at.push(text.length);
+  return { text: out, at };
+}
+
 /** Все совпадения в книге по порядку. */
 export function findMatches(blocks: readonly Block[], query: string): Match[] {
   const needle = normalize(query.trim());
