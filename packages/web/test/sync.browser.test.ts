@@ -168,6 +168,32 @@ async function обменяться(page: Page): Promise<string> {
 }
 
 /** Отдаёт книгу странице так, как это сделал бы проводник. */
+/**
+ * Ждёт, пока страница устоится.
+ *
+ * Вёрстка ленивая: высоты абзацев, до которых читатель не дошёл, сперва
+ * угаданы, а потом уточняются. Пока они гуляют, читалка придерживает место —
+ * и мерить в этот миг значит мерить то, чего читатель никогда не видел.
+ */
+async function settled(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((done) => {
+        let было = -1;
+        let тихих = 0;
+        const начало = performance.now();
+        const кадр = (): void => {
+          const высота = document.documentElement.scrollHeight;
+          тихих = высота === было ? тихих + 1 : 0;
+          было = высота;
+          if (тихих >= 3 || performance.now() - начало > 2500) done();
+          else requestAnimationFrame(кадр);
+        };
+        requestAnimationFrame(кадр);
+      }),
+  );
+}
+
 async function give(page: Page, name: string, text: string): Promise<void> {
   await page.evaluate(
     ({ name, text }) => {
@@ -230,6 +256,7 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     expect(await второе.textContent("#book")).toContain("Абзац номер 20.");
 
     // И открылась там, где её бросили на первом устройстве.
+    await settled(второе);
     const где = await второе.evaluate(() => {
       const node = document.querySelector('[data-block="20"]')!;
       const panel = document.querySelector("#top")!.getBoundingClientRect().bottom;

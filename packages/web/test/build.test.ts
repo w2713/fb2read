@@ -65,3 +65,19 @@ describe("иконки", () => {
     expect(bytes.readUInt32BE(20)).toBe(size);
   });
 });
+
+describe("версия в сборке", () => {
+  it("совпадает с версией пакета", () => {
+    // Второго места, где версию можно забыть обновить, быть не должно: число
+    // подставляется из того же package.json, который поднимается при выпуске.
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const { version } = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")) as {
+      version: string;
+    };
+    const собрано = listFiles(dist)
+      .filter((name) => name.endsWith(".js"))
+      .map((name) => readFileSync(join(dist, name), "utf-8"))
+      .join("\n");
+    expect(собрано).toContain(`fb2read ${version}`);
+  });
+});

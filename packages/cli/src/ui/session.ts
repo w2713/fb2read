@@ -15,15 +15,42 @@ import type { Terminal } from "../term/terminal.js";
 import { Screen } from "../term/screen.js";
 import type { View } from "./view.js";
 
+/**
+ * Сколько ждать, прежде чем перевёрстывать книгу под новый размер окна.
+ *
+ * Терминал шлёт `SIGWINCH` на каждый пиксель протяжки, а перевёрстка книги в
+ * шесть тысяч абзацев стоит около 140 мс. Протяжка окна мышью на тридцать
+ * знакомест — это тридцать перевёрсток и четыре секунды, в которые программа
+ * не отвечает вовсе: измерено.
+ *
+ * Восьмидесяти миллисекунд хватает, чтобы протяжка слиплась в одну
+ * перевёрстку, и мало, чтобы их заметить на одиночном изменении размера.
+ */
+export const RESIZE_WAIT = 80;
+
+export interface SessionOptions {
+  /** Подменяется в тестах: там время идёт по команде, а не само. */
+  schedule?: (fn: () => void, ms: number) => unknown;
+  cancel?: (id: unknown) => void;
+}
+
 export class Session {
   private readonly screen: Screen;
   private view: View | null = null;
   private finish: (() => void) | null = null;
   private waitingKey: (() => void) | null = null;
   private started = false;
+  private resizeTimer: unknown = null;
+  private readonly schedule: (fn: () => void, ms: number) => unknown;
+  private readonly cancel: (id: unknown) => void;
 
-  constructor(readonly terminal: Terminal) {
+  constructor(
+    readonly terminal: Terminal,
+    options: SessionOptions = {},
+  ) {
     this.screen = new Screen(terminal.rows, terminal.columns, terminal.colors);
+    this.schedule = options.schedule ?? ((fn, ms) => setTimeout(fn, ms));
+    this.cancel = options.cancel ?? ((id) => clearTimeout(id as ReturnType<typeof setTimeout>));
   }
 
   /** Занимает терминал: полноэкранный режим, сырой ввод, мышь. */
@@ -56,9 +83,18 @@ export class Session {
     });
 
     this.terminal.onResize(() => {
+      // Модель экрана подстраивается сразу: она должна совпадать с настоящим
+      // терминалом, иначе кадр, нарисованный посреди протяжки, ляжет не в те
+      // ячейки.
       this.screen.resize(this.terminal.rows, this.terminal.columns);
-      this.view?.setSize(this.terminal.rows, this.terminal.columns);
-      this.paint();
+      // А вот перевёрстку книги придерживаем: пока окно тянут мышью, она была
+      // бы выброшена на пол на каждый пиксель.
+      if (this.resizeTimer !== null) this.cancel(this.resizeTimer);
+      this.resizeTimer = this.schedule(() => {
+        this.resizeTimer = null;
+        this.view?.setSize(this.terminal.rows, this.terminal.columns);
+        this.paint();
+      }, RESIZE_WAIT);
     });
   }
 
@@ -66,6 +102,10 @@ export class Session {
   end(): void {
     if (!this.started) return;
     this.started = false;
+    if (this.resizeTimer !== null) {
+      this.cancel(this.resizeTimer);
+      this.resizeTimer = null;
+    }
     this.terminal.leaveRaw();
   }
 

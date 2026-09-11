@@ -84,8 +84,19 @@ function serviceWorker(root: string): Plugin {
   };
 }
 
+/**
+ * Версия читалки — из манифеста пакета.
+ *
+ * С домашнего экрана адресной строки нет, и понять, свежая ли на телефоне
+ * сборка, иначе неоткуда: приходится верить на слово. Число берётся из того же
+ * package.json, который поднимается при выпуске, — второго места, где его можно
+ * забыть обновить, не появляется.
+ */
+const VERSION = JSON.parse(readFileSync(join(process.cwd(), "package.json"), "utf-8")).version;
+
 export default defineConfig({
   base: BASE,
   build: { target: "es2022", outDir: "dist" },
+  define: { __VERSION__: JSON.stringify(VERSION) },
   plugins: [serviceWorker(process.cwd())],
 });
