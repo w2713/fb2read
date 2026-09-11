@@ -1,6 +1,6 @@
 {
   "name": "fb2read-server",
-  "version": "0.20.0",
+  "version": "0.21.0",
   "type": "module",
   "description": "Сервер синхронизации книг и позиций чтения для fb2read",
   "license": "MIT",

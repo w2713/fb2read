@@ -142,6 +142,18 @@ async function openBook(page: Page, name = "Анна Каренина.fb2", byte
 }
 
 
+/**
+ * Высокая PNG: 600×3000, впятеро выше своей ширины.
+ *
+ * Размер настоящий, а не условный, и это выяснилось поломкой: сперва здесь
+ * лежала картинка 2×12, и проверка проходила впустую при любом коде. `max-width`
+ * ширину только ограничивает, а не растягивает — крошечная картинка рисовалась
+ * в свои двенадцать пикселей и влезала в колонку сама собой. Чтобы проверять
+ * предел по высоте, картинка должна быть шире колонки.
+ */
+const TALL_PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAlgAAAu4CAIAAACy2FHaAAAjTUlEQVR42uzVMQEAAACCMOMb2yBuEXhIAeBYJADACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAEwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgCMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBMAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIATBCCQAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgAwQgCMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBMAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIATBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCAIxQAgCMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBMAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIATBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQACOUAAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBMAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIATBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEwAglAMAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIAcAIATBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBMEIJADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCADBCAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAjFACAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAI5QAACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEACMEwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwTACCUAwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBwAgBMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAjBAAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwQAIwTACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAHACAEwQgkAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEIAMEJg7dUxDQAAAICg/q3t4SCCj4ARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAoARAmCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECYIQSAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEAGCEABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAYIQAGKEEABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghABghAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIAEYIgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECgBECYIQAYIQAYIQAYIQAYIQAYIQA8Be3gp65FBVj7AAAAABJRU5ErkJggg==";
+
 /** Однопиксельная PNG: для проверки картинок важно не изображение, а байты. */
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
@@ -205,6 +217,22 @@ function bigBook(count: number): Uint8Array {
       `<section><title><p>Часть вторая</p></title>${абзацы.slice(count / 2).join("")}</section>` +
       "</body></FictionBook>",
   );
+}
+
+/** Долгая книга, в конце которой высокая картинка. */
+function tallImageBook(): Uint8Array {
+  const xml =
+    '<?xml version="1.0" encoding="utf-8"?>' +
+    '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" ' +
+    'xmlns:l="http://www.w3.org/1999/xlink">' +
+    "<description><title-info><book-title>С картинкой</book-title>" +
+    "</title-info></description><body>" +
+    '<section><title><p>Часть первая</p></title>' +
+    Array.from({ length: 40 }, (_, i) => `<p>Абзац номер ${i + 1}.</p>`).join("") +
+    '<p>Перед картинкой.</p><image l:href="#pic1"/>' +
+    "</section></body>" +
+    `<binary id="pic1" content-type="image/png">${TALL_PNG_BASE64}</binary></FictionBook>`;
+  return new TextEncoder().encode(xml);
 }
 
 /**
@@ -276,10 +304,10 @@ async function savedMarks(page: Page): Promise<number[]> {
  * запись идёт своим чередом после нажатия, и перезагрузка, случившаяся раньше
  * неё, потеряет настройку, сколько бы та ни была верна.
  */
-async function savedSettings(page: Page): Promise<{ text?: number }> {
+async function savedSettings(page: Page): Promise<{ text?: number; columns?: number }> {
   return page.evaluate(
     () =>
-      new Promise<{ text?: number }>((resolve) => {
+      new Promise<{ text?: number; columns?: number }>((resolve) => {
         const request = indexedDB.open("fb2read");
         request.onerror = () => resolve({});
         request.onsuccess = () => {
@@ -289,7 +317,7 @@ async function savedSettings(page: Page): Promise<{ text?: number }> {
               .objectStore("settings")
               .get("reader");
             one.onerror = () => resolve({});
-            one.onsuccess = () => resolve((one.result as { text?: number }) ?? {});
+            one.onsuccess = () => resolve((one.result as { text?: number; columns?: number }) ?? {});
           } catch {
             // Хранилища ещё нет — значит, ничего и не записано.
             resolve({});
@@ -618,6 +646,21 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     await page.$$eval("#toc button", (nodes) => (nodes[1] as HTMLElement).click());
     // Уйдя по строке, оглавление закрывается: читать сквозь него нельзя.
     await page.waitForFunction(() => document.querySelector("#toc")!.hasAttribute("hidden"));
+    // Мерить сразу после перехода нельзя, и причина поучительная.
+    //
+    // Вёрстка ленивая: высоты абзацев выше места чтения уточняются уже после
+    // прыжка, и высота страницы на этой книге падает с 8393 пикселей до 4052.
+    // Придержка это выправляет — но в своём кадре, и между перевёрсткой
+    // браузера и её поправкой есть промежуток в один кадр. Читатель его не
+    // видит: поправка идёт в requestAnimationFrame, то есть до отрисовки. А
+    // getBoundingClientRect из проверки читает разметку как раз между кадрами и
+    // потому застаёт то, чего на экране не было.
+    //
+    // Пойман он был в CI, одним и тем же числом раз за разом: снос ровно
+    // 331.86 пикселя — в точности та поправка, которую придержка делает
+    // следующим кадром. Проверено по её журналу: кадр со сносом −331.86, а
+    // следующий уже 0.14.
+    await settled(page);
     const where = await page.evaluate(() => {
       const heads = [...document.querySelectorAll("#book h1, #book h2, #book h3")];
       const second = heads.find((h) => h.textContent === "Часть вторая")!;
@@ -1188,6 +1231,379 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     await page.click("#close");
     await page.waitForSelector("#shelf li", { timeout: 10_000 });
     expect(await page.textContent("#shelf .shelf-about")).toMatch(/[1-9]\d?%/);
+    await page.close();
+  }, SLOW);
+});
+
+/**
+ * Ждёт, пока разворот уляжется.
+ *
+ * `settled` тут не годится: он следит за высотой страницы, а в развороте она
+ * не меняется вовсе — книга растёт вбок. Следить надо за её длиной.
+ */
+async function spreadSettled(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((done) => {
+        const book = document.getElementById("book")!;
+        let было = -1;
+        let тихих = 0;
+        const начало = performance.now();
+        const кадр = (): void => {
+          const длина = book.scrollWidth;
+          тихих = длина === было ? тихих + 1 : 0;
+          было = длина;
+          if (тихих >= 3 || performance.now() - начало > 2500) done();
+          else requestAnimationFrame(кадр);
+        };
+        requestAnimationFrame(кадр);
+      }),
+  );
+}
+
+/** Включает разворот кнопкой и дожидается, пока книга в него встанет. */
+async function turnOnSpread(page: Page): Promise<void> {
+  await page.click("#spread");
+  await page.waitForFunction(() => document.body.classList.contains("spread"), null, {
+    timeout: 10_000,
+  });
+  await spreadSettled(page);
+}
+
+/**
+ * Какой абзац стоит в начале видимой страницы.
+ *
+ * Перебором, а не тем же двоичным поиском, что в читалке: проверка, повторяющая
+ * проверяемое, подтвердила бы только саму себя.
+ */
+async function blockAtPage(page: Page): Promise<number> {
+  return page.evaluate(() => {
+    const book = document.getElementById("book")!;
+    const left = book.getBoundingClientRect().left;
+    let ответ = 0;
+    for (const node of book.querySelectorAll<HTMLElement>("[data-block]")) {
+      if (node.getBoundingClientRect().left - left <= 0) ответ = Number(node.dataset["block"]!);
+      else break;
+    }
+    return ответ;
+  });
+}
+
+/** Номера абзацев, которые видно на этой странице. */
+async function blocksOnPage(page: Page): Promise<number[]> {
+  return page.evaluate(() => {
+    const book = document.getElementById("book")!;
+    const край = book.getBoundingClientRect();
+    const out: number[] = [];
+    for (const node of book.querySelectorAll<HTMLElement>("[data-block]")) {
+      const где = node.getBoundingClientRect();
+      if (где.right > край.left + 1 && где.left < край.right - 1) {
+        out.push(Number(node.dataset["block"]!));
+      }
+    }
+    return out;
+  });
+}
+
+/** Насколько абзац в начале страницы разошёлся с её краем. */
+async function pageDrift(page: Page): Promise<number> {
+  const block = await blockAtPage(page);
+  return page.evaluate((n) => {
+    const book = document.getElementById("book")!;
+    const node = document.querySelector(`[data-block="${n}"]`)!;
+    return node.getBoundingClientRect().left - book.getBoundingClientRect().left;
+  }, block);
+}
+
+describe.skipIf(!CHROME)("разворот в браузере", () => {
+  it("на широком окне книга встаёт в две колонки и не прокручивается вниз", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await turnOnSpread(page);
+
+    const вид = await page.evaluate(() => {
+      const book = document.getElementById("book")!;
+      return {
+        колонок: getComputedStyle(book).columnCount,
+        вбок: book.scrollWidth > book.clientWidth,
+        вниз: document.documentElement.scrollHeight <= window.innerHeight + 1,
+      };
+    });
+    expect(вид.колонок).toBe("2");
+    // Книга длиннее одной страницы — иначе листать было бы нечего.
+    expect(вид.вбок).toBe(true);
+    // Главное отличие разворота: вниз не прокручивается вовсе.
+    expect(вид.вниз).toBe(true);
+    await page.close();
+  }, SLOW);
+
+  it("листание переставляет ровно на разворот", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+
+    // Пять страниц подряд: ошибка в шаге копится, и после одной её не видно.
+    // Шаг в ширину окна разошёлся бы с колонкой на промежуток за страницу.
+    for (let i = 0; i < 5; i += 1) {
+      await page.keyboard.press("ArrowRight");
+      await spreadSettled(page);
+    }
+    expect(Math.abs(await pageDrift(page))).toBeLessThanOrEqual(2);
+    await page.close();
+  }, SLOW);
+
+  it("листание не пропускает текста", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+
+    const было = await blocksOnPage(page);
+    await page.keyboard.press("ArrowRight");
+    await spreadSettled(page);
+    const стало = await blocksOnPage(page);
+
+    expect(стало[0]).toBeGreaterThan(было[0]!);
+    // Между страницами не должно провалиться ни одного абзаца: следующая
+    // начинается с того, на котором прошлая кончилась, или со следующего.
+    expect(стало[0]!).toBeLessThanOrEqual(было[было.length - 1]! + 1);
+    await page.close();
+  }, SLOW);
+
+  it("место переживает включение и выключение разворота", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await readAt(page, 40);
+
+    await turnOnSpread(page);
+    // Абзац, который читали, виден на развороте. Требовать, чтобы он стоял в
+    // начале страницы, нельзя: страницы в многоколоннике лежат по своим
+    // границам, и абзац попадает в середину или во вторую колонку.
+    expect(await blocksOnPage(page)).toContain(40);
+    // А записано именно оно, а не начало страницы: иначе переключение режима
+    // раз за разом уводило бы читателя назад.
+    await expect.poll(() => savedNear(page, 40), { timeout: 5000 }).toBe(true);
+
+    await page.click("#spread");
+    await page.waitForFunction(() => !document.body.classList.contains("spread"), null, {
+      timeout: 10_000,
+    });
+    await settled(page);
+    expect(Math.abs(await blockTop(page, 40))).toBeLessThan(40);
+    await page.close();
+  }, SLOW);
+
+  it("переход по оглавлению попадает на страницу с этим абзацем", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await turnOnSpread(page);
+
+    await page.click("#toc-toggle");
+    await page.click("#toc li:nth-child(2) button");
+    await spreadSettled(page);
+
+    const видно = await page.evaluate(() => {
+      const book = document.getElementById("book")!;
+      const край = book.getBoundingClientRect();
+      const цель = [...book.querySelectorAll("h1, h2, h3")].find((h) =>
+        h.textContent?.includes("Часть вторая"),
+      )!;
+      const где = цель.getBoundingClientRect();
+      return где.left >= край.left - 1 && где.right <= край.right + 1;
+    });
+    expect(видно).toBe(true);
+    await page.close();
+  }, SLOW);
+
+  it("найденное поиском видно на текущей странице", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await turnOnSpread(page);
+
+    await page.click("#find-toggle");
+    await page.fill("#q", "номер 90.");
+    await page.press("#q", "Enter");
+    await page.waitForSelector("#book mark.found", { timeout: 10_000 });
+    await spreadSettled(page);
+
+    const видно = await page.evaluate(() => {
+      const book = document.getElementById("book")!;
+      const край = book.getBoundingClientRect();
+      const где = document.querySelector("#book mark.found")!.getBoundingClientRect();
+      return где.left >= край.left - 1 && где.right <= край.right + 1;
+    });
+    expect(видно).toBe(true);
+    await page.close();
+  }, SLOW);
+
+  it("«крупнее» в развороте не теряет места", async () => {
+    // Книга большая, место — далеко от начала, и размер меняется трижды. Всё
+    // это нарочно: на короткой книге при одном нажатии сдвиг укладывается в ту
+    // же страницу, и проверка проходит впустую даже без возврата на место —
+    // поймано поломкой кода.
+    const page = await browser.newPage();
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+    for (let i = 0; i < 10; i += 1) {
+      await page.keyboard.press("ArrowRight");
+      await spreadSettled(page);
+    }
+    const было = await blockAtPage(page);
+
+    for (let i = 0; i < 3; i += 1) {
+      await page.click("#bigger");
+      await spreadSettled(page);
+    }
+
+    // Крупнее шрифт — длиннее книга, и страницы легли по-другому. Место
+    // сохранено, если абзац, который читали, всё ещё на виду.
+    expect(await blocksOnPage(page)).toContain(было);
+    await page.close();
+  }, SLOW);
+
+  it("высокая картинка не вылезает за колонку", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "С картинкой.fb2", tallImageBook());
+    await turnOnSpread(page);
+
+    await page.click("#find-toggle");
+    await page.fill("#q", "Перед картинкой");
+    await page.press("#q", "Enter");
+    await page.waitForSelector("#book img[src]", { timeout: 10_000 });
+    await spreadSettled(page);
+
+    const мера = await page.evaluate(() => {
+      const book = document.getElementById("book")!;
+      const img = document.querySelector<HTMLImageElement>("#book img[src]")!;
+      return { картинка: img.getBoundingClientRect().height, колонка: book.clientHeight };
+    });
+    expect(мера.картинка).toBeGreaterThan(0);
+    expect(мера.картинка).toBeLessThanOrEqual(мера.колонка);
+    await page.close();
+  }, SLOW);
+
+  it("на окне iPhone в альбомной разворота нет", async () => {
+    // Ширины ему хватает с запасом — 844 пикселя. Не хватает высоты: колонка
+    // вышла бы в пять строк. Порог поэтому по двум измерениям, а не по ширине.
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await turnOnSpread(page);
+
+    await page.setViewportSize({ width: 844, height: 390 });
+    await page.waitForFunction(() => !document.body.classList.contains("spread"), null, {
+      timeout: 10_000,
+    });
+    // И кнопки нет: нажимать её там незачем.
+    expect(await page.isVisible("#spread")).toBe(false);
+    // Книга при этом читается по-прежнему — прокруткой.
+    expect(await page.evaluate(() => document.documentElement.scrollHeight > window.innerHeight))
+      .toBe(true);
+    await page.close();
+  }, SLOW);
+
+  it("протяжка окна идёт по ленивой вёрстке, а страница встаёт ровно", async () => {
+    // Честная вёрстка разворота на книге в шесть тысяч абзацев стоит 426 мс на
+    // один размер, а протяжка края мышью выдаёт их десятками: окно тащилось
+    // рывками по два с половиной кадра в секунду. С ленивой вёрсткой шаг стоит
+    // 21 мс, а честная считается один раз — когда край отпустили.
+    const page = await browser.newPage();
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+    // Пятнадцать страниц, а не пять: сужение окна растягивает книгу, и на той же
+    // прокрутке оказывается текст, читанный раньше. Чем дальше от начала, тем
+    // больше этот сдвиг — на пяти страницах он укладывался в ту же страницу, и
+    // проверка проходила, даже когда место не возвращали вовсе.
+    for (let i = 0; i < 15; i += 1) {
+      await page.keyboard.press("ArrowRight");
+      await spreadSettled(page);
+    }
+    const был = await blockAtPage(page);
+
+    // Событие подаётся прямо в странице, а не настоящим изменением окна:
+    // настоящее идёт через Playwright дольше самой придержки, и застать
+    // протяжку в разгаре им нельзя.
+    const лень = async (): Promise<string> =>
+      page.evaluate(
+        () => getComputedStyle(document.querySelector("#book [data-block]")!).contentVisibility,
+      );
+    await page.evaluate(() => window.dispatchEvent(new Event("resize")));
+    expect(await page.evaluate(() => document.body.classList.contains("resizing"))).toBe(true);
+    expect(await лень()).toBe("auto");
+
+    await page.setViewportSize({ width: 900, height: 720 });
+    await page.waitForFunction(() => !document.body.classList.contains("resizing"), null, {
+      timeout: 10_000,
+    });
+    await spreadSettled(page);
+
+    // Край отпустили — вёрстка снова честная, и страница встала ровно.
+    //
+    // Ровность тут важнее места: книга сужается целиком, и та же прокрутка даёт
+    // почти тот же текст — измерено, сдвиг на три абзаца. А вот на границу
+    // страницы прокрутка уже не приходится: после сужения она пришлась на 18.9-ю
+    // страницу из 110, то есть читатель увидел бы половину одного разворота и
+    // половину соседнего.
+    expect(await лень()).toBe("visible");
+    expect(Math.abs(await pageDrift(page))).toBeLessThanOrEqual(2);
+    // И место не потеряно. Допуск в несколько абзацев — не небрежность: колонки
+    // стали уже, строк в абзаце больше, и тот же текст лёг иначе.
+    expect(Math.abs((await blockAtPage(page)) - был)).toBeLessThanOrEqual(5);
+    await page.close();
+  }, SLOW);
+
+  it("колесо листает разворот, а не прокручивает страницу", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+    const был = await blockAtPage(page);
+
+    await page.mouse.move(400, 400);
+    await page.mouse.wheel(0, 200);
+    await spreadSettled(page);
+
+    expect(await blockAtPage(page)).toBeGreaterThan(был);
+    // Вниз при этом страница не поехала: в развороте низа нет.
+    expect(await page.evaluate(() => window.scrollY)).toBe(0);
+    await page.close();
+  }, SLOW);
+
+  it("закрытая книга не оставляет разворот на первом экране", async () => {
+    // Правила разворота задают ширину всей страницы, а не одной книги: остаться
+    // на первом экране они не должны, иначе полка разъезжается во всю ширину
+    // разворота.
+    const page = await browser.newPage();
+    await page.goto(base);
+    const ширина = async (): Promise<number> =>
+      page.evaluate(() => document.getElementById("app")!.getBoundingClientRect().width);
+    const было = await ширина();
+
+    await give(page, "Долгая книга.fb2", longBook());
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await settled(page);
+    await turnOnSpread(page);
+    expect(await ширина()).toBeGreaterThan(было);
+
+    await page.click("#close");
+    await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
+    expect(await page.evaluate(() => document.body.classList.contains("spread"))).toBe(false);
+    expect(await ширина()).toBe(было);
+    await page.close();
+  }, SLOW);
+
+  it("выбор разворота переживает перезагрузку", async () => {
+    const page = await browser.newPage();
+    await openBook(page, "Долгая книга.fb2", longBook());
+    await turnOnSpread(page);
+    // Сперва дожидаемся самой записи: перезагрузка, случившаяся раньше неё,
+    // потеряла бы настройку, сколько бы та ни была верна.
+    await expect.poll(() => savedSettings(page).then((s) => s.columns), { timeout: 5000 }).toBe(2);
+
+    await page.reload();
+    await page.waitForSelector("#shelf li", { timeout: 20_000 });
+    await page.click("#shelf .shelf-open");
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await spreadSettled(page);
+
+    expect(await page.evaluate(() => document.body.classList.contains("spread"))).toBe(true);
     await page.close();
   }, SLOW);
 });
