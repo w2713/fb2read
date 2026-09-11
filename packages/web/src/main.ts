@@ -22,8 +22,34 @@ import {
 } from "@fb2read/core";
 import { IdbStore, type BookMeta } from "./db.js";
 import { firstFrom, step } from "./find.js";
-import { DEFAULT_TEXT, atEdge, stepSize, textSize } from "./look.js";
-import { fitsSpread, pageAt, pageCount, pageLeft, pageStep, stepPage } from "./spread.js";
+import {
+  COLUMN_WIDTHS,
+  DEFAULT_COLUMN,
+  DEFAULT_COUNT,
+  DEFAULT_SPACING,
+  DEFAULT_TEXT,
+  TEXT_SIZES,
+  atEdge,
+  columnCount,
+  columnWidth,
+  flagOf,
+  lineHeight,
+  nextSpacing,
+  spacingOf,
+  stepColumn,
+  stepSize,
+  textSize,
+} from "./look.js";
+import {
+  GUTTER,
+  chosenColumns,
+  fitsSpread,
+  pageAt,
+  pageCount,
+  pageLeft,
+  pageStep,
+  stepPage,
+} from "./spread.js";
 import { marked, removeMark, sortedMarks, toggleMark } from "./marks.js";
 import { holdPlace, type Holder } from "./hold.js";
 import { keepPosition, searchTop, type Keeper } from "./position.js";
@@ -59,6 +85,16 @@ const progressLabel = document.querySelector<HTMLElement>("#progress")!;
 const smaller = document.querySelector<HTMLButtonElement>("#smaller")!;
 const bigger = document.querySelector<HTMLButtonElement>("#bigger")!;
 const spreadButton = document.querySelector<HTMLButtonElement>("#spread")!;
+const app = document.querySelector<HTMLElement>("#app")!;
+const prefsPanel = document.querySelector<HTMLElement>("#prefs")!;
+const prefWidth = document.querySelector<HTMLSelectElement>("#pref-width")!;
+const prefColumns = document.querySelector<HTMLSelectElement>("#pref-columns")!;
+const prefText = document.querySelector<HTMLSelectElement>("#pref-text")!;
+const prefSpacing = document.querySelector<HTMLSelectElement>("#pref-spacing")!;
+const prefTheme = document.querySelector<HTMLSelectElement>("#pref-theme")!;
+const prefJustify = document.querySelector<HTMLInputElement>("#pref-justify")!;
+const prefHyphens = document.querySelector<HTMLInputElement>("#pref-hyphens")!;
+const prefsNote = document.querySelector<HTMLElement>("#prefs-note")!;
 const shelf = document.querySelector<HTMLElement>("#shelf")!;
 const greeting = document.querySelector<HTMLElement>("#greeting")!;
 const storageLine = document.querySelector<HTMLElement>("#storage")!;
@@ -280,7 +316,7 @@ async function showImage(img: HTMLImageElement, src: string): Promise<void> {
 
 // --- панели ----------------------------------------------------------------
 
-const PANELS = { toc: tocPanel, find: findPanel, marks: marksPanel };
+const PANELS = { toc: tocPanel, find: findPanel, marks: marksPanel, prefs: prefsPanel };
 
 /**
  * Показывает одну панель и прячет прочие.
@@ -559,26 +595,38 @@ function goBack(): void {
 let size = DEFAULT_TEXT;
 
 /**
- * Меняет размер текста, не теряя места в книге.
+ * Меняет облик книги, не теряя места чтения.
  *
- * Крупнее шрифт — больше строк, и всё, что ниже, съезжает: прокрутка в
- * пикселях после этого показывает совсем другое место. Поэтому запоминается
- * абзац, который читают, и после перевёрстки читалка возвращается к нему. Без
- * этого настройка стоила бы читателю потерянной страницы при каждом нажатии.
+ * Любая настройка облика перевёрстывает книгу целиком: крупнее шрифт — больше
+ * строк, уже колонка — тоже, и всё, что ниже, съезжает. Прокрутка в пикселях
+ * после этого показывает совсем другое место. Поэтому запоминается абзац,
+ * который читают, и после перевёрстки читалка возвращается к нему. Без этого
+ * каждое нажатие стоило бы читателю потерянной страницы.
+ *
+ * В развороте держаться за долю абзаца незачем: строки уходят в соседнюю
+ * колонку, а не вниз, и место возвращается переходом к абзацу — тем же, что у
+ * оглавления. Заодно пересчитывается число колонок: ширина колонки могла
+ * измениться, а значит, их в окно помещается уже другое число.
  */
-async function applySize(next: number): Promise<void> {
-  // В развороте держаться за долю абзаца незачем: строки уходят в соседнюю
-  // колонку, а не вниз, и место возвращается переходом к абзацу — тем же, что
-  // у оглавления.
+function relayout(change: () => void): void {
   const anchor = open && !spread() ? anchorAtTop() : null;
   const block = open && spread() ? blockAtTop() : null;
-  size = next;
-  document.documentElement.style.setProperty("--text", `${next}rem`);
-  showSizeEdges();
+  change();
+  if (spread()) setSpreadColumns();
   // Придержка сама возвращает на место — первым же делом и потом ещё
   // несколько кадров, пока высоты уточняются.
   if (anchor) holdPlaceAt(anchor);
   if (block !== null) goToBlock(block);
+}
+
+/** Меняет размер текста, не теряя места в книге. */
+async function applySize(next: number): Promise<void> {
+  relayout(() => {
+    size = next;
+    document.documentElement.style.setProperty("--text", `${next}rem`);
+    showSizeEdges();
+  });
+  showPrefs();
   await store.saveSettings({ text: next });
 }
 
@@ -719,6 +767,165 @@ function showSizeEdges(): void {
   bigger.disabled = atEdge(size, 1);
 }
 
+// --- облик книги -----------------------------------------------------------
+
+/*
+ * Настройки облика: те же величины, что в терминале, и те же клавиши.
+ *
+ * Читалка в браузере до сих пор решала за читателя всё, кроме темы и размера
+ * шрифта: колонка была в тридцать четыре рем, выключка и переносы — всегда, а
+ * межстрочный интервал — какой в стилях записан. За столом так нельзя: ширина
+ * строки, интервал и ровный правый край — это то, в чём люди расходятся, а не
+ * то, что можно угадать за них.
+ *
+ * Хранится всё там же, где тема и разворот, — в базе устройства. На сервер
+ * настройки не уезжают, и телефон настольного выбора не увидит: разворота на
+ * нём нет вовсе, а колонка в сорок четыре рем туда и не поместится.
+ */
+
+/** Ширина колонки, в рем. */
+let column = DEFAULT_COLUMN;
+
+/** Сколько колонок в развороте; ноль — сколько поместится в окно. */
+let count = DEFAULT_COUNT;
+
+/** Межстрочный интервал: 1, 2 или 3 — как в терминале. */
+let spacing = DEFAULT_SPACING;
+
+/**
+ * Выключка и переносы.
+ *
+ * По умолчанию включены, и это не оплошность: в браузерной читалке они
+ * работали с самого начала и выключить их было нечем. Настройка даёт отказ,
+ * а не меняет вид у тех, кто ничего не просил.
+ */
+let justify = true;
+let hyphens = true;
+
+/** Имена ширин: числа в рем читателю ничего не говорят. */
+const WIDTH_NAMES = ["узкая", "уже обычной", "обычная", "шире обычной", "широкая"];
+
+/** Имена размеров шрифта — в том же порядке, что и сами размеры. */
+const SIZE_NAMES = [
+  "самый мелкий",
+  "мельче обычного",
+  "обычный",
+  "крупнее обычного",
+  "крупный",
+  "очень крупный",
+  "самый крупный",
+];
+
+/** Заполняет список значениями и именами. */
+function fillChoices(select: HTMLSelectElement, values: readonly number[], names: string[]): void {
+  for (const [i, value] of values.entries()) {
+    const option = document.createElement("option");
+    option.value = String(value);
+    option.textContent = names[i] ?? String(value);
+    select.append(option);
+  }
+}
+
+fillChoices(prefWidth, COLUMN_WIDTHS, WIDTH_NAMES);
+fillChoices(prefText, TEXT_SIZES, SIZE_NAMES);
+
+/**
+ * Приписывает облик к корню страницы — дальше всё делает CSS.
+ *
+ * Переменными, а не пометками на теле: по `--column` считается и ширина
+ * колонки, и ширина панели, и сколько колонок влезет в разворот, а пометка
+ * потребовала бы правила на каждое сочетание.
+ */
+function paintLook(): void {
+  const root = document.documentElement.style;
+  root.setProperty("--column", `${column}rem`);
+  root.setProperty("--line", `${lineHeight(spacing)}`);
+  // `left`, а не `start`: у книги свободным становится правый край.
+  root.setProperty("--align", justify ? "justify" : "left");
+  // `manual` — это «переносить только там, где в тексте стоит мягкий перенос»,
+  // то есть нигде: в наших книгах их не бывает.
+  root.setProperty("--hyphens", hyphens ? "auto" : "manual");
+}
+
+async function chooseWidth(next: number): Promise<void> {
+  relayout(() => {
+    column = next;
+    paintLook();
+  });
+  showPrefs();
+  await store.saveSettings({ width: next });
+}
+
+async function chooseSpacing(next: number): Promise<void> {
+  relayout(() => {
+    spacing = next;
+    paintLook();
+  });
+  showPrefs();
+  await store.saveSettings({ spacing: next });
+}
+
+async function chooseJustify(on: boolean): Promise<void> {
+  relayout(() => {
+    justify = on;
+    paintLook();
+  });
+  showPrefs();
+  await store.saveSettings({ justify: on });
+}
+
+async function chooseHyphens(on: boolean): Promise<void> {
+  relayout(() => {
+    hyphens = on;
+    paintLook();
+  });
+  showPrefs();
+  await store.saveSettings({ hyphens: on });
+}
+
+/**
+ * Выбор колонок: одна с прокруткой или разворот, и сколько в нём колонок.
+ *
+ * Записывается двумя числами, и второе — не лишнее. `columns` — тот же
+ * переключатель, что в терминале: 1 или 2. `columnCount` — сколько колонок в
+ * развороте, ноль значит «сколько поместится». Так запись прошлых версий
+ * читается как была: у тех, кто уже читает разворотом, записано `columns: 2`,
+ * и они получают счёт по ширине окна, а не ровно две колонки на весь монитор.
+ */
+async function chooseColumns(value: number): Promise<void> {
+  spreadWanted = value !== 1;
+  // Отказ от разворота число колонок не забывает: вернувшись, читатель должен
+  // получить то же, чем читал.
+  if (value !== 1) count = value;
+  refitSpread();
+  showPrefs();
+  await store.saveSettings({ columns: spreadWanted ? 2 : 1, columnCount: count });
+}
+
+/** Показывает в панели то, чем читают сейчас. */
+function showPrefs(): void {
+  prefWidth.value = String(column);
+  prefColumns.value = String(spreadWanted ? count : 1);
+  prefText.value = String(size);
+  prefSpacing.value = String(spacing);
+  prefTheme.value = document.documentElement.getAttribute("data-theme") ?? "auto";
+  prefJustify.checked = justify;
+  prefHyphens.checked = hyphens;
+  // Выбор разворота запоминается и на узком окне, но не применяется: молчать
+  // об этом значило бы оставить читателя гадать, почему ничего не произошло.
+  prefsNote.textContent =
+    spreadWanted && !spreadFits() ? "Разворот включится на окне пошире и повыше." : "";
+}
+
+prefWidth.addEventListener("change", () => void chooseWidth(Number(prefWidth.value)));
+prefColumns.addEventListener("change", () => void chooseColumns(Number(prefColumns.value)));
+prefText.addEventListener("change", () => void applySize(Number(prefText.value)));
+prefSpacing.addEventListener("change", () => void chooseSpacing(Number(prefSpacing.value)));
+prefTheme.addEventListener("change", () => void applyTheme(prefTheme.value));
+prefJustify.addEventListener("change", () => void chooseJustify(prefJustify.checked));
+prefHyphens.addEventListener("change", () => void chooseHyphens(prefHyphens.checked));
+document.querySelector("#prefs-toggle")!.addEventListener("click", () => togglePanel("prefs"));
+
 // --- разворот --------------------------------------------------------------
 
 /**
@@ -765,6 +972,26 @@ function measureBar(): void {
   // при обычной прокрутке, где переменная не нужна вовсе.
   if (было === `${height}px`) return;
   document.documentElement.style.setProperty("--bar", `${height}px`);
+}
+
+/**
+ * Сколько колонок показывать — и записать это стилям.
+ *
+ * Ширина берётся у страницы, а не у `#app`: предел самого `#app` считается из
+ * числа колонок, и мерить одно по другому значило бы гоняться за собственным
+ * хвостом — четыре колонки давали бы предел 2320, из него вышло бы три, из
+ * трёх — снова четыре.
+ *
+ * Выбранное читателем число колонок сильнее счёта, но только вниз: просил
+ * четыре, а встают три — будет три, иначе колонки вышли бы уже заказанных.
+ */
+function setSpreadColumns(): void {
+  const style = getComputedStyle(app);
+  const inside =
+    document.body.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+  const rem = rootSize();
+  const n = chosenColumns(count, inside, column * rem, GUTTER * rem);
+  document.documentElement.style.setProperty("--cols", String(n));
 }
 
 /** Шаг страницы в пикселях. */
@@ -829,16 +1056,19 @@ function refitSpread(): void {
   document.body.classList.toggle("spread", want);
   listenWheel(want);
   // Высота панели нужна только развороту: из неё считается высота колонки.
-  if (want) measureBar();
+  // Число колонок — до неё: от него зависит ширина, по которой панель
+  // переносит кнопки на вторую строку.
+  if (want) {
+    setSpreadColumns();
+    measureBar();
+  }
   showSpreadState();
   if (block !== null && (want || было)) goToBlock(block);
 }
 
-/** Выбор читателя: запоминается, как тема и размер текста. */
+/** Кнопка и клавиша `v`: включить разворот или вернуться к прокрутке. */
 async function chooseSpread(on: boolean): Promise<void> {
-  spreadWanted = on;
-  refitSpread();
-  await store.saveSettings({ columns: on ? 2 : 1 });
+  await chooseColumns(on ? count : 1);
 }
 
 /**
@@ -905,6 +1135,7 @@ async function applyTheme(theme: string): Promise<void> {
   if (theme === "auto") document.documentElement.removeAttribute("data-theme");
   else document.documentElement.setAttribute("data-theme", theme);
   paintStatusBar();
+  showPrefs();
   await store.saveSettings({ theme });
 }
 
@@ -1199,10 +1430,23 @@ async function runSync(quiet = false): Promise<void> {
 
 // --- показ книги -----------------------------------------------------------
 
+/**
+ * Переключает экран: библиотека или книга.
+ *
+ * Одним местом, потому что переключений три, а состояний, которые надо
+ * согласовать, четыре. Пометка на теле нужна стилям: за столом начальный экран
+ * раскладывается во всю ширину, а книга держится колонки.
+ */
+function showScreen(which: "start" | "book"): void {
+  const reading = which === "book";
+  article.hidden = !reading;
+  bar.hidden = !reading;
+  start.hidden = reading;
+  document.body.classList.toggle("reading", reading);
+}
+
 function showFailure(text: string): void {
-  start.hidden = false;
-  article.hidden = true;
-  bar.hidden = true;
+  showScreen("start");
   const box = document.createElement("p");
   box.className = "failure";
   box.textContent = text;
@@ -1213,9 +1457,7 @@ function showFailure(text: string): void {
 async function show(book: ParsedBook): Promise<void> {
   document.title = book.title ? `${book.title} — fb2read` : "fb2read";
   article.innerHTML = renderBook(book.blocks);
-  article.hidden = false;
-  start.hidden = true;
-  bar.hidden = false;
+  showScreen("book");
   // Вид приводится к выбору читателя до восстановления места: в развороте место
   // ищется по страницам, а не по прокрутке окна.
   refitSpread();
@@ -1350,9 +1592,7 @@ document.querySelector("#theme")!.addEventListener("click", () => {
 document.querySelector("#close")!.addEventListener("click", () => {
   // Экран переключается сразу, а место дописывается следом: ждать записи
   // читателю незачем, а задержка на телефоне читается как «не нажалось».
-  article.hidden = true;
-  bar.hidden = true;
-  start.hidden = false;
+  showScreen("start");
   document.title = "fb2read";
   // Полка перерисовывается после записи: процент только что изменился, и
   // список должен показывать то же, что показывала книга.
@@ -1408,6 +1648,28 @@ document.addEventListener("keydown", (event) => {
     case "v":
       // Та же клавиша, что переключает разворот в терминале.
       void chooseSpread(!spreadWanted);
+      break;
+    // Настройки облика — теми же клавишами, что в терминале.
+    case "+":
+    case "=":
+      void chooseWidth(stepColumn(column, 1));
+      break;
+    case "-":
+      void chooseWidth(stepColumn(column, -1));
+      break;
+    case "s":
+      void chooseSpacing(nextSpacing(spacing));
+      break;
+    case "J":
+      void chooseJustify(!justify);
+      break;
+    case "H":
+      void chooseHyphens(!hyphens);
+      break;
+    // Панели в терминале нет — настройки там меняются клавишами и только ими.
+    // Запятая — там, где её ждут: так открываются настройки почти везде.
+    case ",":
+      togglePanel("prefs");
       break;
     // Листание. При прокрутке эти клавиши оставлены браузеру: он прокручивает
     // ими сам, и делает это лучше нас.
@@ -1477,6 +1739,13 @@ void store.loadSettings().then((settings) => {
   showSizeEdges();
   // Разворот записан тем же числом, что и в терминале: 1 или 2.
   spreadWanted = settings.columns === 2;
+  column = columnWidth(settings["width"]);
+  count = columnCount(settings["columnCount"]);
+  spacing = spacingOf(settings["spacing"]);
+  justify = flagOf(settings["justify"], true);
+  hyphens = flagOf(settings["hyphens"], true);
+  paintLook();
+  showPrefs();
 });
 
 // Версия — на первом экране. С домашнего экрана адресной строки нет, и узнать,

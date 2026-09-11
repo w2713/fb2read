@@ -304,10 +304,10 @@ async function savedMarks(page: Page): Promise<number[]> {
  * запись идёт своим чередом после нажатия, и перезагрузка, случившаяся раньше
  * неё, потеряет настройку, сколько бы та ни была верна.
  */
-async function savedSettings(page: Page): Promise<{ text?: number; columns?: number }> {
+async function savedSettings(page: Page): Promise<Record<string, unknown>> {
   return page.evaluate(
     () =>
-      new Promise<{ text?: number; columns?: number }>((resolve) => {
+      new Promise<Record<string, unknown>>((resolve) => {
         const request = indexedDB.open("fb2read");
         request.onerror = () => resolve({});
         request.onsuccess = () => {
@@ -317,7 +317,7 @@ async function savedSettings(page: Page): Promise<{ text?: number; columns?: num
               .objectStore("settings")
               .get("reader");
             one.onerror = () => resolve({});
-            one.onsuccess = () => resolve((one.result as { text?: number; columns?: number }) ?? {});
+            one.onsuccess = () => resolve((one.result as Record<string, unknown>) ?? {});
           } catch {
             // Хранилища ещё нет — значит, ничего и не записано.
             resolve({});
@@ -1579,8 +1579,12 @@ describe.skipIf(!CHROME)("разворот в браузере", () => {
     await give(page, "Долгая книга.fb2", longBook());
     await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
     await settled(page);
+    // Ширину разворота сравниваем с книгой, а не с первым экраном: полка за
+    // столом сама раскладывается шире колонки, и разворот на узком окне бывает
+    // уже неё. Проверяется здесь не «шире всего», а «шире, чем было у книги».
+    const однаКолонка = await ширина();
     await turnOnSpread(page);
-    expect(await ширина()).toBeGreaterThan(было);
+    expect(await ширина()).toBeGreaterThan(однаКолонка);
 
     await page.click("#close");
     await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
@@ -1604,6 +1608,309 @@ describe.skipIf(!CHROME)("разворот в браузере", () => {
     await spreadSettled(page);
 
     expect(await page.evaluate(() => document.body.classList.contains("spread"))).toBe(true);
+    await page.close();
+  }, SLOW);
+});
+
+/**
+ * Настройки облика: ширина колонки, интервал, выключка, переносы.
+ *
+ * Разворот проверяется выше — здесь то, что меняет вид книги в любом режиме, и
+ * то, ради чего настройки вообще появились: за столом читают не так, как на
+ * телефоне, и решать это должен читатель, а не наши представления о хорошей
+ * колонке.
+ */
+describe.skipIf(!CHROME)("настройки облика", () => {
+  /** Открывает книгу на окне нужного размера и раскрывает настройки. */
+  async function withPrefs(width: number, height: number): Promise<Page> {
+    const page = await browser.newPage({ viewport: { width, height } });
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await page.click("#prefs-toggle");
+    await page.waitForSelector("#prefs:not([hidden])", { timeout: 10_000 });
+    return page;
+  }
+
+  /** Во что превратилось правило у настоящего абзаца. */
+  async function paragraphStyle(
+    page: Page,
+  ): Promise<{ align: string; hyphens: string; line: string; width: string }> {
+    return page.evaluate(() => {
+      const p = document.querySelector("#book p")!;
+      const style = getComputedStyle(p);
+      return {
+        align: style.textAlign,
+        hyphens: style.hyphens,
+        line: style.lineHeight,
+        width: getComputedStyle(document.getElementById("app")!).width,
+      };
+    });
+  }
+
+  it("на широком мониторе колонок столько, сколько поместится", async () => {
+    // Главная просьба: разворот в две колонки занимал 1136 пикселей из 2560, а
+    // растянуть те же две на весь монитор нельзя — строка вышла бы в сто сорок
+    // знаков. Ширину забирает число колонок.
+    const page = await browser.newPage({ viewport: { width: 2560, height: 1440 } });
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+    const широкий = await page.evaluate(() => {
+      const book = document.getElementById("book")!;
+      const style = getComputedStyle(book);
+      const колонок = Number(style.columnCount);
+      const промежуток = parseFloat(style.columnGap);
+      return {
+        колонок,
+        колонка: (book.clientWidth - (колонок - 1) * промежуток) / колонок,
+        занято: document.getElementById("app")!.getBoundingClientRect().width,
+      };
+    });
+    expect(широкий.колонок).toBe(4);
+    // Колонка при этом осталась той же, какой была в две колонки на ноутбуке.
+    expect(широкий.колонка).toBeGreaterThan(500);
+    expect(широкий.колонка).toBeLessThan(600);
+    // И экран занят: было 1136 из 2560.
+    expect(широкий.занято).toBeGreaterThan(2200);
+
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await spreadSettled(page);
+    await expect
+      .poll(() => page.evaluate(() => getComputedStyle(document.getElementById("book")!).columnCount))
+      .toBe("3");
+    await page.close();
+  }, SLOW);
+
+  it("на четырёх колонках листание не теряет ни абзаца", async () => {
+    // Арифметика шага считана на двух колонках, и на четырёх она могла бы
+    // разойтись: промежутков между колонками больше, а между разворотами —
+    // по-прежнему один.
+    const page = await browser.newPage({ viewport: { width: 2560, height: 1440 } });
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+
+    const первая = await blocksOnPage(page);
+    await page.keyboard.press("ArrowRight");
+    await spreadSettled(page);
+    const вторая = await blocksOnPage(page);
+
+    expect(первая.length).toBeGreaterThan(20);
+    expect(вторая[0]!).toBeGreaterThan(первая[0]!);
+    // Ни один абзац между страницами не провалился: следующая начинается с
+    // того, на котором кончилась эта (он бывает разорван границей страницы),
+    // или со следующего за ним.
+    expect(вторая[0]!).toBeLessThanOrEqual(первая[первая.length - 1]! + 1);
+
+    // Пять страниц подряд: ошибка в шаге копится и после одной незаметна. На
+    // четырёх колонках промежутков внутри страницы три, а между страницами
+    // по-прежнему один — шаг от этого не меняется, и проверить это надо.
+    for (let i = 0; i < 4; i += 1) {
+      await page.keyboard.press("ArrowRight");
+      await spreadSettled(page);
+    }
+    expect(Math.abs(await pageDrift(page))).toBeLessThanOrEqual(2);
+    await page.close();
+  }, SLOW);
+
+  it("ширина колонки меняет и колонку, и их число", async () => {
+    const page = await browser.newPage({ viewport: { width: 2560, height: 1440 } });
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+    await page.click("#prefs-toggle");
+    await page.waitForSelector("#prefs:not([hidden])", { timeout: 10_000 });
+
+    const колонок = async (): Promise<string> =>
+      page.evaluate(() => getComputedStyle(document.getElementById("book")!).columnCount);
+
+    expect(await колонок()).toBe("4");
+    // Широкая колонка забирает себе место соседей, а не плодит их.
+    await page.selectOption("#pref-width", "44");
+    await spreadSettled(page);
+    await expect.poll(колонок).toBe("3");
+    // Узкая — наоборот.
+    await page.selectOption("#pref-width", "26");
+    await spreadSettled(page);
+    await expect.poll(колонок).toBe("5");
+    await page.close();
+  }, SLOW);
+
+  it("заданное число колонок сильнее счёта по ширине", async () => {
+    // Четыре колонки на мониторе — разумное поведение, но не обязанность: кому
+    // это газета, тот ставит две и получает две.
+    const page = await browser.newPage({ viewport: { width: 2560, height: 1440 } });
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    await turnOnSpread(page);
+    await page.click("#prefs-toggle");
+    await page.waitForSelector("#prefs:not([hidden])", { timeout: 10_000 });
+    const колонок = async (): Promise<string> =>
+      page.evaluate(() => getComputedStyle(document.getElementById("book")!).columnCount);
+
+    await page.selectOption("#pref-columns", "2");
+    await spreadSettled(page);
+    await expect.poll(колонок).toBe("2");
+
+    await page.selectOption("#pref-columns", "0");
+    await spreadSettled(page);
+    await expect.poll(колонок).toBe("4");
+
+    // И к прокрутке возвращает тот же список.
+    await page.selectOption("#pref-columns", "1");
+    await page.waitForFunction(() => !document.body.classList.contains("spread"), null, {
+      timeout: 10_000,
+    });
+    await page.close();
+  }, SLOW);
+
+  it("выключку и переносы можно выключить", async () => {
+    // В браузерной читалке они были прибиты в стилях: ровный правый край
+    // нравится не всем, а отказаться было нечем.
+    const page = await withPrefs(1440, 900);
+    const было = await paragraphStyle(page);
+    expect(было.align).toBe("justify");
+    expect(было.hyphens).toBe("auto");
+
+    await page.uncheck("#pref-justify");
+    await page.uncheck("#pref-hyphens");
+    const стало = await paragraphStyle(page);
+    expect(стало.align).toBe("left");
+    // manual — это «только там, где в тексте стоит мягкий перенос», то есть
+    // нигде: в книгах их не бывает.
+    expect(стало.hyphens).toBe("manual");
+    await page.close();
+  }, SLOW);
+
+  it("настройки переживают перезагрузку", async () => {
+    const page = await withPrefs(1440, 900);
+    await page.selectOption("#pref-width", "26");
+    await page.selectOption("#pref-spacing", "3");
+    await page.uncheck("#pref-justify");
+    // Сперва дожидаемся записи: перезагрузка раньше неё потеряла бы настройку,
+    // сколько бы та ни была верна.
+    await expect
+      .poll(() => savedSettings(page).then((s) => [s["width"], s["spacing"], s["justify"]]), {
+        timeout: 5000,
+      })
+      .toEqual([26, 3, false]);
+
+    await page.reload();
+    await page.waitForSelector("#shelf li", { timeout: 20_000 });
+    await page.click("#shelf .shelf-open");
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await settled(page);
+
+    const стало = await paragraphStyle(page);
+    expect(стало.align).toBe("left");
+    // Просторный интервал — 2 от размера текста; текст при этом обычный, 18px.
+    expect(parseFloat(стало.line)).toBeCloseTo(36, 0);
+    // Узкая колонка — 26 рем при корне 16.
+    expect(parseFloat(стало.width)).toBeCloseTo(416, 0);
+    await page.close();
+  }, SLOW);
+
+  it("смена ширины колонки не теряет места в книге", async () => {
+    // Уже колонка — больше строк, и всё, что ниже, съезжает: прокрутка в
+    // пикселях после этого показывает совсем другое место.
+    const page = await withPrefs(1440, 900);
+    await page.evaluate(() => {
+      document.querySelector('[data-block="200"]')!.scrollIntoView();
+    });
+    await settled(page);
+    const было = (await topBlock(page))!;
+
+    await page.selectOption("#pref-width", "26");
+    await settled(page);
+    const стало = (await topBlock(page))!;
+
+    expect(было).toBeGreaterThan(150);
+    // Абзац тот же или соседний: перевёрстка сдвигает строку, но не главу.
+    expect(Math.abs(стало - было)).toBeLessThanOrEqual(1);
+    await page.close();
+  }, SLOW);
+
+  it("клавиши те же, что в терминале", async () => {
+    const page = await withPrefs(1440, 900);
+    const облик = async (): Promise<{
+      column: string;
+      line: string;
+      align: string;
+      hyphens: string;
+    }> =>
+      page.evaluate(() => {
+        const root = getComputedStyle(document.documentElement);
+        return {
+          column: root.getPropertyValue("--column").trim(),
+          line: root.getPropertyValue("--line").trim(),
+          align: root.getPropertyValue("--align").trim(),
+          hyphens: root.getPropertyValue("--hyphens").trim(),
+        };
+      });
+    // Панель закрываем: клавиши читают книгу, а не поле ввода.
+    await page.keyboard.press("Escape");
+
+    await page.keyboard.press("+");
+    expect((await облик()).column).toBe("38rem");
+    await page.keyboard.press("-");
+    await page.keyboard.press("-");
+    expect((await облик()).column).toBe("30rem");
+
+    await page.keyboard.press("s");
+    expect((await облик()).line).toBe("2");
+    await page.keyboard.press("J");
+    expect((await облик()).align).toBe("left");
+    await page.keyboard.press("H");
+    expect((await облик()).hyphens).toBe("manual");
+    await page.close();
+  }, SLOW);
+
+  it("кнопки стоят над текстом, а не по краям монитора", async () => {
+    // На мониторе 2560 панель тянулась во всю ширину, а книга сидела островом
+    // посередине: кнопка «Тема» стояла в семистах пикселях от текста.
+    const page = await browser.newPage({ viewport: { width: 2560, height: 1440 } });
+    await openBook(page, "Большая книга.fb2", bigBook(600));
+    const разъезд = await page.evaluate(() => {
+      const текст = document.getElementById("app")!.getBoundingClientRect();
+      const первая = document.getElementById("close")!.getBoundingClientRect();
+      const последняя = document.getElementById("theme")!.getBoundingClientRect();
+      return {
+        слева: Math.abs(первая.left - текст.left),
+        заТекстом: последняя.right - текст.right,
+        доКрая: window.innerWidth - последняя.right,
+      };
+    });
+    // Панель начинается там же, где текст.
+    expect(разъезд.слева).toBeLessThan(2);
+    // Кнопок больше, чем помещается в колонку, и вправо они выходят за текст —
+    // но остаются при нём, а не улетают к краю монитора: раньше «Тема» стояла
+    // в пятнадцати пикселях от края экрана и в тысяче от книги.
+    expect(разъезд.заТекстом).toBeLessThan(разъезд.доКрая);
+    await page.close();
+  }, SLOW);
+
+  it("полка за столом раскладывается в несколько столбцов", async () => {
+    const page = await browser.newPage({ viewport: { width: 1600, height: 1000 } });
+    await page.goto(base);
+    // Книги нарочно разной длины: полка узнаёт их по отпечатку содержимого, и
+    // четыре одинаковых файла легли бы на неё одной книгой — на этом проверка
+    // сперва и попалась.
+    for (const [i, имя] of ["Первая", "Вторая", "Третья", "Четвёртая"].entries()) {
+      await give(page, `${имя}.fb2`, bigBook(20 + i));
+      await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+      await page.click("#close");
+      await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
+    }
+    // Полка перерисовывается после записи места, а не сразу по нажатию: без
+    // ожидания последняя книга на ней ещё не появилась.
+    await page.waitForFunction(() => document.querySelectorAll("#shelf li").length === 4, null, {
+      timeout: 10_000,
+    });
+    const рядов = await page.evaluate(() => {
+      const верх = new Set<number>();
+      for (const li of document.querySelectorAll("#shelf li")) {
+        верх.add(Math.round(li.getBoundingClientRect().top));
+      }
+      return { рядов: верх.size, книг: document.querySelectorAll("#shelf li").length };
+    });
+    expect(рядов.книг).toBe(4);
+    // Четыре книги в два ряда: список в одну книгу на строку дал бы четыре.
+    expect(рядов.рядов).toBe(2);
     await page.close();
   }, SLOW);
 });
