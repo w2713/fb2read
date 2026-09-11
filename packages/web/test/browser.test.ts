@@ -269,6 +269,36 @@ async function savedMarks(page: Page): Promise<number[]> {
   return marks.filter((mark) => !mark.deleted).map((mark) => mark.block);
 }
 
+/**
+ * Что записано в IndexedDB о настройках читалки.
+ *
+ * Нужно, чтобы отличить «настройка не сохраняется» от «не успела сохраниться»:
+ * запись идёт своим чередом после нажатия, и перезагрузка, случившаяся раньше
+ * неё, потеряет настройку, сколько бы та ни была верна.
+ */
+async function savedSettings(page: Page): Promise<{ text?: number }> {
+  return page.evaluate(
+    () =>
+      new Promise<{ text?: number }>((resolve) => {
+        const request = indexedDB.open("fb2read");
+        request.onerror = () => resolve({});
+        request.onsuccess = () => {
+          try {
+            const one = request.result
+              .transaction("settings", "readonly")
+              .objectStore("settings")
+              .get("reader");
+            one.onerror = () => resolve({});
+            one.onsuccess = () => resolve((one.result as { text?: number }) ?? {});
+          } catch {
+            // Хранилища ещё нет — значит, ничего и не записано.
+            resolve({});
+          }
+        };
+      }),
+  );
+}
+
 /** Что записано в IndexedDB о месте в книге. */
 async function savedBlocks(page: Page): Promise<number[]> {
   return (await savedRecords(page)).map((record) => record.block);
@@ -977,6 +1007,10 @@ describe.skipIf(!CHROME)("читалка в браузере", () => {
     const выбранный = await page.evaluate(
       () => getComputedStyle(document.querySelector("#book")!).fontSize,
     );
+    // Дожидаемся самой записи, а не просто нажатия: она идёт своим чередом, и
+    // перезагрузка, случившаяся раньше неё, потеряла бы настройку. Проверяется
+    // здесь другое — что записанное читается обратно.
+    await expect.poll(async () => (await savedSettings(page)).text, { timeout: 10_000 }).toBeDefined();
 
     await page.reload();
     await page.waitForSelector("#shelf li", { timeout: 10_000 });
