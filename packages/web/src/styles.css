@@ -705,9 +705,87 @@ body.spread #book .image img {
 }
 
 #panel li .mark-go,
-#toc li button {
+#toc .toc-go {
   display: block;
   flex: 1;
+}
+
+/* --- оглавление деревом ----------------------------------------------------- */
+
+/* У строки оглавления есть вложенный список, и рядом с названием ему не место:
+   поэтому строка — блок, а в ряд встаёт то, что внутри неё. */
+#toc li {
+  display: block;
+}
+
+.toc-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+}
+
+/* Вложенный список отодвигается ступенькой, а не отступом по уровню: уровень
+   теперь виден самой вложенностью. */
+#toc ul ul {
+  max-width: none;
+  margin: 0;
+  padding: 0 0 0 1.1rem;
+}
+
+/* Свёрнутое — свёрнуто. */
+#toc li:not(.open) > ul {
+  display: none;
+}
+
+/*
+ * Треугольник рисуется рамкой, а не буквой: символы ▸ и ▾ в разных шрифтах
+ * разной ширины и высоты, и столбец названий от этого пляшет.
+ */
+.toc-fold {
+  flex: none;
+  width: 1.1rem;
+  padding: 0.5rem 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.toc-fold::before {
+  content: "";
+  display: block;
+  width: 0;
+  height: 0;
+  border-left: 0.36rem solid currentColor;
+  border-top: 0.3rem solid transparent;
+  border-bottom: 0.3rem solid transparent;
+  color: var(--dim);
+}
+
+.open > .toc-row > .toc-fold::before {
+  border-left: 0.3rem solid transparent;
+  border-right: 0.3rem solid transparent;
+  border-top: 0.36rem solid currentColor;
+  border-bottom: 0;
+}
+
+.toc-fold:hover::before {
+  color: var(--accent);
+}
+
+/* У строки без детей треугольника нет, но место под него остаётся: иначе
+   названия одного уровня не встают в столбец. */
+.toc-fold:disabled {
+  cursor: default;
+}
+
+.toc-fold:disabled::before {
+  display: none;
+}
+
+/* Глава, которую читают: в дереве из сотни строк её иначе не найти. */
+#toc .here > .toc-row > .toc-go {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 #panel li button:hover {
