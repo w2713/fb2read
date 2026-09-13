@@ -2058,6 +2058,43 @@ describe.skipIf(!CHROME)("оглавление деревом", () => {
     await page.close();
   }, SLOW);
 
+  it("раскрытая панель не уносит записанное место", async () => {
+    // Панель занимает пол-экрана, край чтения уезжает под неё, и у края
+    // оказывается уже другой абзац — измерено, 301 → 318. Читатель при этом
+    // никуда не двигался. Записать такое значило бы уносить место вперёд за
+    // одно открытие списка, и это осталось бы в книге, закрой он вкладку не
+    // закрыв панель.
+    const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+    await openBook(page, "Книга с частями.fb2", partsBook());
+    await scrollToBlock(page, 300);
+    await settled(page);
+    await expect.poll(() => savedBlocks(page).then((b) => b[0]), { timeout: 5000 }).toBeGreaterThan(
+      250,
+    );
+    const было = (await savedBlocks(page))[0]!;
+
+    await page.click("#toc-toggle");
+    await page.waitForSelector("#toc:not([hidden])", { timeout: 10_000 });
+    await settled(page);
+    // Времени на запись было вдоволь: хранитель пишет с задержкой, и если бы
+    // он записал место из-под панели, за секунду оно бы уже лежало в базе.
+    //
+    // Допуск в один абзац — не слабость проверки, а та же задержка записи: к
+    // моменту первого чтения из базы хранитель мог держать в памяти соседний
+    // абзац. Настоящий снос — пятнадцать абзацев, и его этот допуск не
+    // пропускает.
+    await page.waitForTimeout(1000);
+    expect(Math.abs((await savedBlocks(page))[0]! - было)).toBeLessThanOrEqual(1);
+
+    // И после закрытия место то же: страница вернулась в прежний вид.
+    await page.click("#toc-toggle");
+    await page.waitForFunction(() => document.querySelector("#toc")!.hasAttribute("hidden"));
+    await settled(page);
+    await page.waitForTimeout(1000);
+    expect(Math.abs((await savedBlocks(page))[0]! - было)).toBeLessThanOrEqual(1);
+    await page.close();
+  }, SLOW);
+
   it("раскрытие оглавления не сдвигает текст под ним", async () => {
     // Строка с местом подводится под взгляд прокруткой самой панели. Взять
     // `scrollIntoView` было бы проще, но он прокручивает и страницу, а страница
