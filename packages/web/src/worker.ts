@@ -14,7 +14,7 @@
  * передачу между потоками, объект Book — нет.
  */
 
-import { Book } from "@fb2read/core";
+import { Book, findMatches, matchContext } from "@fb2read/core";
 import { BrowserFileSource } from "./source.js";
 
 /** Что поток отдаёт обратно: всё, что нужно показать книгу. */
@@ -31,11 +31,23 @@ export interface ParsedBook {
   repairs: string[];
 }
 
+/** Одна находка в книге: где она и что вокруг неё написано. */
+export interface Hit {
+  block: number;
+  offset: number;
+  /** Выдержка вокруг совпадения — её и показывают в списке. */
+  text: string;
+}
+
 export type Request =
   // Книга едет сюда как Blob, а не как File: с полки она приходит именно так,
   // и пересобирать её в File значило бы скопировать все сорок мегабайт.
   | { id: number; kind: "parse"; data: Blob; name: string }
-  | { id: number; kind: "image"; src: string };
+  | { id: number; kind: "image"; src: string }
+  // Поиск по книге с полки: разбираем, ищем и отдаём только находки. Сама
+  // книга наружу не едет — незачем гонять между потоками мегабайты ради
+  // десятка строк.
+  | { id: number; kind: "find"; data: Blob; name: string; query: string };
 
 /**
  * Просьба без номера.
@@ -49,6 +61,7 @@ export type Ask<T = Request> = T extends { id: number } ? Omit<T, "id"> : never;
 export type Reply =
   | { id: number; ok: true; kind: "parse"; book: ParsedBook }
   | { id: number; ok: true; kind: "image"; image: Blob | null }
+  | { id: number; ok: true; kind: "find"; hits: Hit[] }
   | { id: number; ok: false; error: string };
 
 /** Последняя разобранная книга: из неё и достаются картинки. */
@@ -74,6 +87,27 @@ async function handle(request: Request): Promise<Reply> {
         repairs: book.repairs,
       },
     };
+  }
+
+  if (request.kind === "find") {
+    // Разобранная книга в `current` не записывается: там лежит та, которую
+    // читают, и из неё достаются картинки.
+    //
+    // Сегодня затереть её отсюда всё равно не вышло бы: поиск по полке идёт с
+    // начального экрана, а открытие книги его останавливает — книга и поиск
+    // не живут одновременно. Оговорка стоит на будущее: стоит завести поиск по
+    // полке прямо из читалки, и без неё открытая книга молча осталась бы без
+    // иллюстраций. Проверкой это не закрыто — через интерфейс до такого
+    // состояния не добраться.
+    const book = await Book.open(new BrowserFileSource(request.data, request.name));
+    const hits = findMatches(book.blocks, request.query).map((match) => ({
+      block: match.block,
+      offset: match.offset,
+      // Выдержка собирается здесь: блоки наружу не едут, а показать находку
+      // без текста вокруг неё нельзя.
+      text: matchContext(book.blocks[match.block]!, match.offset),
+    }));
+    return { id: request.id, ok: true, kind: "find", hits };
   }
 
   const image = current ? await current.imageData(request.src) : null;
