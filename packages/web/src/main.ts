@@ -19,6 +19,7 @@ import {
   progressPercent,
   type Bookmark,
   type Match,
+  type TocEntry,
 } from "@fb2read/core";
 import { IdbStore, type BookMeta } from "./db.js";
 import { firstFrom, step } from "./find.js";
@@ -63,6 +64,7 @@ import {
   type SyncSettings,
 } from "./sync.js";
 import { bookSize, shelfOrder, whenRead } from "./shelf.js";
+import { entryAt, hasDepth, nestToc, type TocNode } from "./toc.js";
 import type { Ask, ParsedBook, Reply } from "./worker.js";
 
 const start = document.querySelector<HTMLElement>("#start")!;
@@ -328,6 +330,9 @@ function showPanel(which: keyof typeof PANELS | null): void {
   for (const [name, node] of Object.entries(PANELS)) node.hidden = name !== which;
   panel.hidden = which === null;
   if (which === "find") query.focus();
+  // Место мерится после раскрытия панели: в прокрутке она занимает высоту, и
+  // до неё у верхнего края стоял другой абзац.
+  if (which === "toc" && open) markTocPlace(blockAtTop() ?? 0);
 }
 
 function togglePanel(which: keyof typeof PANELS): void {
@@ -336,25 +341,117 @@ function togglePanel(which: keyof typeof PANELS): void {
 
 // --- оглавление ------------------------------------------------------------
 
+/*
+ * Оглавление — дерево, а не список с отступами.
+ *
+ * Уровни в нём были с самого начала, но рисовались отступом в плоском списке:
+ * у книги с частями и главами это сотни строк, и нужную ищут прокруткой. Части
+ * сворачиваются, а открытой стоит та ветка, в которой читают, — её же строка
+ * и подсвечена.
+ *
+ * У книги с плоским оглавлением не меняется ничего: сворачивать там нечего, и
+ * треугольников нет вовсе.
+ */
+
+/** Строки оглавления в том же порядке, что и в книге: по ним ищется место. */
+let tocRows: Array<HTMLElement | undefined> = [];
+
 function fillToc(book: ParsedBook): void {
   tocPanel.innerHTML = "";
+  tocRows = [];
+  // Номер строки берётся у плоского списка: в дереве порядок тот же, но
+  // считать его заново значило бы повторить сборку дерева своими руками.
+  const numbers = new Map(book.toc.map((entry, i) => [entry, i]));
+  tocPanel.append(tocBranch(nestToc(book.toc), numbers, hasDepth(book.toc)));
+}
+
+/** Рисует одну ветку дерева и всё, что под ней. */
+function tocBranch(
+  nodes: readonly TocNode[],
+  numbers: Map<TocEntry, number>,
+  deep: boolean,
+): HTMLUListElement {
   const list = document.createElement("ul");
-  for (const entry of book.toc) {
+  for (const node of nodes) {
     const item = document.createElement("li");
-    item.style.paddingLeft = `${Math.min(entry.level, 4)}rem`;
+    const row = document.createElement("div");
+    row.className = "toc-row";
+
+    if (deep) {
+      const fold = document.createElement("button");
+      fold.type = "button";
+      fold.className = "toc-fold";
+      if (node.children.length) {
+        fold.addEventListener("click", () => foldToc(item, !item.classList.contains("open")));
+      } else {
+        // У строки без детей сворачивать нечего, но место под треугольник
+        // остаётся: иначе названия одного уровня не встают в столбец.
+        fold.disabled = true;
+        fold.tabIndex = -1;
+        fold.setAttribute("aria-hidden", "true");
+      }
+      row.append(fold);
+    }
+
     const link = document.createElement("button");
     link.type = "button";
-    link.textContent = entry.title;
+    link.className = "toc-go";
+    link.textContent = node.entry.title;
     link.addEventListener("click", () => {
       // Сперва закрыть, потом переходить: раскрытый список занимает место на
       // странице, и переход, посчитанный при нём, промахнётся на его высоту.
       showPanel(null);
-      goToBlock(entry.block);
+      goToBlock(node.entry.block);
     });
-    item.append(link);
+    row.append(link);
+    item.append(row);
+    tocRows[numbers.get(node.entry)!] = item;
+
+    if (node.children.length) item.append(tocBranch(node.children, numbers, deep));
     list.append(item);
   }
-  tocPanel.append(list);
+  return list;
+}
+
+/** Разворачивает или сворачивает ветку. */
+function foldToc(item: HTMLElement, show: boolean): void {
+  item.classList.toggle("open", show);
+  const fold = item.querySelector<HTMLButtonElement>(":scope > .toc-row > .toc-fold");
+  if (!fold) return;
+  fold.setAttribute("aria-expanded", show ? "true" : "false");
+  fold.title = show ? "Свернуть" : "Развернуть";
+}
+
+/**
+ * Показывает в оглавлении главу, которую читают, и раскрывает путь к ней.
+ *
+ * Раскрывается только путь: остальные части остаются свёрнутыми, иначе от
+ * дерева не было бы никакого проку — читатель снова смотрел бы на сотни строк.
+ */
+function markTocPlace(block: number): void {
+  for (const item of tocRows) item?.classList.remove("here");
+  const at = entryAt(open?.book.toc ?? [], block);
+  const item = at < 0 ? undefined : tocRows[at];
+  if (!item) return;
+  item.classList.add("here");
+  for (let up = item.parentElement?.closest("li"); up; up = up.parentElement?.closest("li")) {
+    foldToc(up, true);
+  }
+  showTocRow(item);
+}
+
+/**
+ * Подводит строку под взгляд, прокручивая только сам список.
+ *
+ * Не `scrollIntoView`: он прокручивает и страницу тоже, а страница — это книга,
+ * и место чтения от такой прокрутки уехало бы. Панель прокручивается своей
+ * полосой, её и двигаем.
+ */
+function showTocRow(item: HTMLElement): void {
+  const где = item.getBoundingClientRect();
+  const окно = panel.getBoundingClientRect();
+  if (где.top >= окно.top && где.bottom <= окно.bottom) return;
+  panel.scrollTop += где.top - окно.top - panel.clientHeight / 3;
 }
 
 // --- поиск -----------------------------------------------------------------
