@@ -42,5 +42,13 @@ export {
   SyncError,
   SKEW_LIMIT,
 } from "./sync.js";
-export type { SyncState, RemoteBook, SyncOptions, SyncFetch, SyncRequest, SyncResponse } from "./sync.js";
+export type {
+  SyncState,
+  RemoteBook,
+  ServerHealth,
+  SyncOptions,
+  SyncFetch,
+  SyncRequest,
+  SyncResponse,
+} from "./sync.js";
 export type { QuickMeta } from "./meta.js";

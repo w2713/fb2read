@@ -113,7 +113,18 @@ export async function cmdRemote(prefs: SyncPrefs): Promise<number> {
   if (!settings) return 2;
   const client = clientFor(settings);
   try {
-    const [books, states] = await Promise.all([client.list(), client.states(0)]);
+    const [health, books, states] = await Promise.all([
+      client.health(),
+      client.list(),
+      client.states(0),
+    ]);
+    // Первой строкой — с кем говорим. Когда что-то не сходится, первый вопрос
+    // всегда этот, а узнать ответ было неоткуда.
+    out(
+      health.version
+        ? `сервер fb2read-server ${health.version}`
+        : "сервер версии не назвал — он старее этой читалки",
+    );
     if (!books.length) {
       out("на сервере книг нет");
       return 0;

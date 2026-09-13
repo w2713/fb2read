@@ -177,6 +177,13 @@ function trimSlashes(url: string): string {
  * Все ошибки — сети, кода ответа, разбора — приходят как SyncError с текстом,
  * который можно показать читателю без перевода.
  */
+/** Что сервер рассказывает о себе на пробу живости. */
+export interface ServerHealth {
+  ok: boolean;
+  /** Версия сервера; `null` — сервер старее этой читалки и её не называет. */
+  version: string | null;
+}
+
 export class SyncClient {
   private readonly base: string;
   private readonly timeoutMs: number;
@@ -240,6 +247,23 @@ export class SyncClient {
     } catch {
       throw new SyncError("сервер ответил не тем, что ожидалось");
     }
+  }
+
+  /**
+   * Жив ли сервер и какой он версии.
+   *
+   * Без токена: узнать, с какой версией говоришь, нужно как раз тогда, когда
+   * что-то не сходится, — а токен в такую минуту может оказаться и неверным.
+   *
+   * Версии может не быть вовсе: сервер старее этой читалки её не называл.
+   * Тогда `null`, а не выдумка — «неизвестно» здесь честный ответ.
+   */
+  async health(): Promise<ServerHealth> {
+    const data = await this.json<{ ok?: boolean; version?: unknown }>("/health");
+    return {
+      ok: data.ok === true,
+      version: typeof data.version === "string" && data.version ? data.version : null,
+    };
   }
 
   /** Книги, лежащие на сервере. */
