@@ -6,8 +6,10 @@
  */
 
 import { createServer, parseTokens } from "./server.js";
+// Отсюда её берут и те, кто привык искать версию в main.
+export { VERSION } from "./version.js";
 
-export const VERSION = "0.23.0";
+import { VERSION } from "./version.js";
 
 const HELP = `Использование: fb2read-server
 

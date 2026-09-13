@@ -98,6 +98,26 @@ export function client(settings: SyncSettings, timeoutMs: number): SyncClient {
 }
 
 /**
+ * Что за сервер на том конце — словами для читателя.
+ *
+ * Спрашивается без токена и коротким сроком: это не обмен, а справка, и
+ * ждать её десять секунд читателю незачем. Ошибку не бросает вовсе: не
+ * ответивший сервер — тоже ответ, и настройки от этого открываться не
+ * перестанут.
+ */
+export async function serverLine(settings: SyncSettings): Promise<string> {
+  try {
+    const health = await client(settings, 4000).health();
+    if (!health.ok) return "сервер отвечает не так, как ожидалось";
+    return health.version
+      ? `сервер fb2read-server ${health.version}`
+      : "сервер версии не назвал — он старее этой читалки";
+  } catch (e) {
+    return `сервер не отвечает: ${(e as Error).message}`;
+  }
+}
+
+/**
  * Забирает с сервера одну книгу и возвращает её на полку.
  *
  * Нужна тому, кто убрал книгу с устройства, а потом передумал: снятая книга

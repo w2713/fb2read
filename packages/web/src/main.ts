@@ -58,6 +58,7 @@ import { renderBook, renderOne } from "./render.js";
 import {
   exchange,
   fetchBook,
+  serverLine,
   forgetBook,
   guessDevice,
   syncSettings,
@@ -111,6 +112,7 @@ const syncUrl = document.querySelector<HTMLInputElement>("#sync-url")!;
 const syncToken = document.querySelector<HTMLInputElement>("#sync-token")!;
 const syncDevice = document.querySelector<HTMLInputElement>("#sync-device")!;
 const syncAuto = document.querySelector<HTMLInputElement>("#sync-auto")!;
+const syncServer = document.querySelector<HTMLElement>("#sync-server")!;
 
 const store = new IdbStore();
 const worker = new Worker(new URL("./worker.ts", import.meta.url), { type: "module" });
@@ -1636,8 +1638,27 @@ syncNow.addEventListener("click", () => void runSync());
 
 syncSetup.addEventListener("click", () => {
   syncForm.hidden = !syncForm.hidden;
-  if (!syncForm.hidden) syncUrl.focus();
+  if (syncForm.hidden) return;
+  syncUrl.focus();
+  askServer();
 });
+
+/**
+ * Спрашивает сервер, кто он, и пишет ответ в настройках.
+ *
+ * Только при открытых настройках: ходить в сеть на каждом запуске читалки
+ * ради справки незачем, а сюда приходят как раз тогда, когда она нужна.
+ */
+function askServer(): void {
+  if (!server) {
+    syncServer.textContent = "";
+    return;
+  }
+  syncServer.textContent = "спрашиваю сервер…";
+  void serverLine(server).then((text) => {
+    syncServer.textContent = text;
+  });
+}
 
 syncForm.addEventListener("submit", (event) => {
   event.preventDefault();
@@ -1653,6 +1674,7 @@ syncForm.addEventListener("submit", (event) => {
     .then(loadSync)
     .then(() => {
       syncForm.hidden = true;
+      syncServer.textContent = "";
       syncNote.textContent = server ? "сервер записан" : "адрес пуст — обмена не будет";
     });
 });

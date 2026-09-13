@@ -6,14 +6,16 @@
  * позиции на двух устройствах, а такое ловится только сквозным прогоном.
  */
 
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { SyncClient, sha256Hex, type SyncState } from "@fb2read/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, parseTokens } from "../src/server.js";
+import { VERSION } from "../src/version.js";
 
 const TOKEN = "b8f1c0d2e3a45f6789ab";
 
@@ -89,6 +91,26 @@ describe("доступ", () => {
     // Иначе они видели бы книги друг друга, а один из токенов молча
     // переставал бы работать.
     expect(() => parseTokens("я:a, /я:b")).toThrow(/называются/);
+  });
+});
+
+describe("проба живости", () => {
+  it("отвечает без токена и называет свою версию", async () => {
+    // Без токена нарочно: узнать, с какой версией говоришь, нужно как раз
+    // тогда, когда что-то не сходится, — а токен в такую минуту может
+    // оказаться и неверным. Той же пробой живости пользуется reverse proxy.
+    const anon = new SyncClient({ url, timeoutMs: 5000 });
+    const health = await anon.health();
+    expect(health.ok).toBe(true);
+    expect(health.version).toBe(VERSION);
+  });
+
+  it("версия — та же, что печатается при запуске", async () => {
+    // Иначе сервер говорил бы про себя одно, а показывал другое.
+    const manifest = JSON.parse(
+      readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf-8"),
+    ) as { version: string };
+    expect((await client().health()).version).toBe(manifest.version);
   });
 });
 

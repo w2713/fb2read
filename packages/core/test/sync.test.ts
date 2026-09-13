@@ -158,6 +158,44 @@ describe("клиент", () => {
     expect(seen).toBe("https://books.example.org/api/v1/books");
   });
 
+  it("спрашивает версию сервера без токена", async () => {
+    // Токен здесь не нужен и вреден: узнать, с какой версией говоришь, нужно
+    // как раз тогда, когда что-то не сходится, а токен может быть и неверным.
+    let auth: string | undefined;
+    let seen = "";
+    const client = new SyncClient({
+      url: "http://localhost",
+      token: "s3cr3t-token",
+      fetch: fakeFetch((url, init) => {
+        seen = url;
+        auth = init?.headers?.["Authorization"];
+        return { ok: true, version: "0.24.0" };
+      }),
+    });
+    const health = await client.health();
+    expect(seen).toBe("http://localhost/api/v1/health");
+    expect(auth).toBeUndefined();
+    expect(health).toEqual({ ok: true, version: "0.24.0" });
+  });
+
+  it("старый сервер версии не называет — и это не ошибка", async () => {
+    // Серверы, поднятые до этой правки, отвечают одним `ok`. Читалка должна
+    // сказать «неизвестно», а не упасть и не выдумать число.
+    const client = new SyncClient({
+      url: "http://localhost",
+      fetch: fakeFetch(() => ({ ok: true })),
+    });
+    expect(await client.health()).toEqual({ ok: true, version: null });
+  });
+
+  it("версией считается только строка", async () => {
+    const client = new SyncClient({
+      url: "http://localhost",
+      fetch: fakeFetch(() => ({ ok: true, version: 24 })),
+    });
+    expect((await client.health()).version).toBe(null);
+  });
+
   it("подписывает запросы токеном", async () => {
     let auth: string | undefined;
     const client = new SyncClient({

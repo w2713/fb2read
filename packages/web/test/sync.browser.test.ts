@@ -405,4 +405,25 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     expect(await обменяться(page)).toContain("токен");
     await page.close();
   }, SLOW);
+
+  it("в настройках видно, какой версии сервер", async () => {
+    // Сервер здесь настоящий, тот же, что уезжает в Docker, — значит, версия
+    // в строке та самая, которую он и правда собой представляет.
+    const page = await browser.newPage();
+    await page.goto(base);
+    await setUp(page);
+
+    await page.click("#sync-setup");
+    await page.waitForFunction(
+      () => (document.getElementById("sync-server")?.textContent ?? "").includes("fb2read-server"),
+      null,
+      { timeout: 10_000 },
+    );
+    const строка = await page.$eval("#sync-server", (node) => node.textContent ?? "");
+    const manifest = JSON.parse(
+      readFileSync(join(resolve(here, "..", "..", "server"), "package.json"), "utf-8"),
+    ) as { version: string };
+    expect(строка).toBe(`сервер fb2read-server ${manifest.version}`);
+    await page.close();
+  }, SLOW);
 });

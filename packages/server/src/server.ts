@@ -11,6 +11,7 @@
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { SKEW_LIMIT, nameWithExt, sha256Hex, type SyncState } from "@fb2read/core";
 import { Storage, isHash, safeExt, type BookEntry } from "./storage.js";
+import { VERSION } from "./version.js";
 
 /** Настройки сервера. */
 export interface ServerOptions {
@@ -179,8 +180,13 @@ export function createHandler(options: ServerOptions) {
     }
 
     // Проба живости: без токена, чтобы reverse proxy мог её опрашивать.
+    //
+    // Версия здесь же, и тоже без токена: узнать, с какой версией сервера
+    // говоришь, нужно как раз тогда, когда что-то не сходится, — а токен в
+    // такую минуту может оказаться и неверным. Секрета в номере версии нет:
+    // он и так написан в открытом репозитории.
     if (path === "/api/v1/health") {
-      json(response, 200, { ok: true }, cors);
+      json(response, 200, { ok: true, version: VERSION }, cors);
       return;
     }
 
