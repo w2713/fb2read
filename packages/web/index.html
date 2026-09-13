@@ -151,6 +151,16 @@
         </label>
         <p class="hint">Или перетащите файл сюда.</p>
 
+        <!-- Поиск по всем книгам сразу. Появляется, только когда книг на
+             полке больше одной: по единственной книге ищут, открыв её. -->
+        <form id="shelf-find" hidden>
+          <input id="shelf-q" type="search" placeholder="Найти во всех книгах" autocomplete="off" />
+          <button type="submit">Искать</button>
+          <button type="button" id="shelf-stop" hidden>Стоп</button>
+        </form>
+        <p id="shelf-found-note" class="hint" hidden></p>
+        <div id="shelf-found" hidden></div>
+
         <!-- Книга остаётся в браузере: искать её в «Файлах» второй раз никто
              не станет, а на телефоне это и вовсе конец всей затее. -->
         <ul id="shelf"></ul>

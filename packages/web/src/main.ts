@@ -64,9 +64,10 @@ import {
   syncSettings,
   type SyncSettings,
 } from "./sync.js";
-import { bookSize, shelfOrder, whenRead } from "./shelf.js";
+import { bookSize, shelfOrder, whenRead, type ShelfEntry } from "./shelf.js";
+import { capHits, findOrder, progressLine, worthFinding } from "./shelffind.js";
 import { entryAt, hasDepth, nestToc, type TocNode } from "./toc.js";
-import type { Ask, ParsedBook, Reply } from "./worker.js";
+import type { Ask, Hit, ParsedBook, Reply } from "./worker.js";
 
 const start = document.querySelector<HTMLElement>("#start")!;
 const article = document.querySelector<HTMLElement>("#book")!;
@@ -99,6 +100,11 @@ const prefJustify = document.querySelector<HTMLInputElement>("#pref-justify")!;
 const prefHyphens = document.querySelector<HTMLInputElement>("#pref-hyphens")!;
 const prefsNote = document.querySelector<HTMLElement>("#prefs-note")!;
 const shelf = document.querySelector<HTMLElement>("#shelf")!;
+const shelfFind = document.querySelector<HTMLFormElement>("#shelf-find")!;
+const shelfQuery = document.querySelector<HTMLInputElement>("#shelf-q")!;
+const shelfStop = document.querySelector<HTMLButtonElement>("#shelf-stop")!;
+const shelfFoundNote = document.querySelector<HTMLElement>("#shelf-found-note")!;
+const shelfFound = document.querySelector<HTMLElement>("#shelf-found")!;
 const greeting = document.querySelector<HTMLElement>("#greeting")!;
 const storageLine = document.querySelector<HTMLElement>("#storage")!;
 const installLine = document.querySelector<HTMLElement>("#install")!;
@@ -1269,6 +1275,8 @@ async function fillShelf(): Promise<void> {
   const { books, states } = await store.shelf();
   const entries = shelfOrder(books, states);
   shelf.innerHTML = "";
+  // По единственной книге ищут, открыв её: поле поиска по полке там лишнее.
+  shelfFind.hidden = entries.length < 2;
   greeting.textContent = entries.length
     ? "Ваши книги. Они остаются здесь и открываются без сети."
     : "Читалка книг FB2 и EPUB. Откройте книгу с устройства.";
@@ -1446,7 +1454,7 @@ async function persisted(): Promise<boolean> {
 }
 
 /** Открывает книгу, лежащую на полке. */
-async function openStored(hash: string): Promise<void> {
+async function openStored(hash: string, at?: number): Promise<void> {
   const meta = await store.bookMeta(hash);
   const data = meta && (await store.bookFile(hash));
   if (!meta || !data) {
@@ -1454,13 +1462,133 @@ async function openStored(hash: string): Promise<void> {
     await fillShelf();
     return;
   }
-  await openBlob(data, meta.name);
+  await openBlob(data, meta.name, at);
 }
 
 async function dropBook(hash: string): Promise<void> {
   await store.dropBook(hash);
   await fillShelf();
 }
+
+// --- поиск по всей полке ----------------------------------------------------
+
+/*
+ * Поиск по всем книгам сразу: перебором, книга за книгой.
+ *
+ * Указателя нет нарочно. Измерено на книге в 2.3 МБ: разбор 408 мс, сам поиск
+ * по разобранной книге 93 мс — вся цена в разборе. Указатель (сохранённый
+ * текст всех книг) снял бы её ценой удвоения места на полке, а браузер вправе
+ * стереть хранилище сайта, куда давно не заходили: платить местом за скорость
+ * здесь не стоит.
+ *
+ * Вместо этого находки показываются по мере готовности, и обход начинается с
+ * недавно читанных книг — первая находка появляется через полсекунды, а не
+ * через четыре. Кому этого мало, тот нажимает «Стоп».
+ */
+
+/** Идущий сейчас поиск. Им же его и останавливают. */
+let finding: { stop: boolean } | null = null;
+
+function stopFinding(): void {
+  if (finding) finding.stop = true;
+  finding = null;
+  shelfStop.hidden = true;
+}
+
+async function findOnShelf(query: string): Promise<void> {
+  stopFinding();
+  const run = { stop: false };
+  finding = run;
+  shelfFound.innerHTML = "";
+  shelfFound.hidden = false;
+  shelfFoundNote.hidden = false;
+  shelfStop.hidden = false;
+
+  const { books, states } = await store.shelf();
+  // Имя файла берётся у полки, а не у названия книги: по нему поток узнаёт
+  // формат, а названия расширения не имеют.
+  const names = new Map(books.map((book) => [book.hash, book.name]));
+  const queue = findOrder(shelfOrder(books, states));
+  let done = 0;
+  let found = 0;
+  shelfFoundNote.textContent = progressLine(done, queue.length, found);
+
+  for (const entry of queue) {
+    if (run.stop) return;
+    const data = await store.bookFile(entry.hash);
+    // Книга пропала из хранилища — это не повод обрывать поиск по остальным.
+    if (data) {
+      const reply = await ask({
+        kind: "find",
+        data,
+        name: names.get(entry.hash) ?? entry.title,
+        query,
+      });
+      if (run.stop) return;
+      if (reply.ok && reply.kind === "find" && reply.hits.length) {
+        found += reply.hits.length;
+        shelfFound.append(foundInBook(entry, reply.hits));
+      }
+    }
+    done += 1;
+    shelfFoundNote.textContent = progressLine(done, queue.length, found);
+  }
+
+  if (finding === run) {
+    finding = null;
+    shelfStop.hidden = true;
+  }
+}
+
+/** Находки одной книги: заголовок, выдержки и честный остаток. */
+function foundInBook(entry: ShelfEntry, hits: readonly Hit[]): HTMLElement {
+  const box = document.createElement("section");
+  box.className = "found-book";
+
+  const head = document.createElement("h3");
+  head.textContent = entry.title;
+  box.append(head);
+
+  const list = document.createElement("ul");
+  const { shown, more } = capHits(hits);
+  for (const hit of shown) {
+    const item = document.createElement("li");
+    const go = document.createElement("button");
+    go.type = "button";
+    go.textContent = hit.text;
+    // Открывает книгу сразу на найденном месте. Поиск при этом кончается: по
+    // одной находке уходят читать, а не смотреть остальные.
+    go.addEventListener("click", () => void openStored(entry.hash, hit.block));
+    item.append(go);
+    list.append(item);
+  }
+  box.append(list);
+
+  if (more) {
+    const rest = document.createElement("p");
+    rest.className = "note-line";
+    rest.textContent = `…и ещё ${plural(more, "находка", "находки", "находок")}`;
+    box.append(rest);
+  }
+  return box;
+}
+
+shelfFind.addEventListener("submit", (event) => {
+  event.preventDefault();
+  const query = shelfQuery.value.trim();
+  if (!worthFinding(query)) {
+    shelfFound.hidden = true;
+    shelfFoundNote.hidden = false;
+    shelfFoundNote.textContent = "для поиска нужно хотя бы две буквы";
+    return;
+  }
+  void findOnShelf(query);
+});
+
+shelfStop.addEventListener("click", () => {
+  stopFinding();
+  shelfFoundNote.textContent += " · остановлено";
+});
 
 /**
  * Кладёт прочитанную книгу на полку.
@@ -1600,8 +1728,11 @@ async function show(book: ParsedBook): Promise<void> {
  * Разница только в том, откуда взялся Blob; всё остальное — разбор в потоке,
  * показ, сохранение на полку — одно и то же.
  */
-async function openBlob(data: Blob, name: string): Promise<void> {
+async function openBlob(data: Blob, name: string, at?: number): Promise<void> {
   start.querySelector(".failure")?.remove();
+  // Поиск по полке сам занимает поток разбора и ведёт свой счёт просьб к нему;
+  // открытая книга важнее, и ждать его очереди она не должна.
+  stopFinding();
   await closeOpen();
   const reply = await ask({ kind: "parse", data, name });
   // Пока читали, могли выбрать другую книгу: показываем только последнюю.
@@ -1613,6 +1744,8 @@ async function openBlob(data: Blob, name: string): Promise<void> {
   if (reply.kind !== "parse") return;
   await keepBook(data, name, reply.book);
   await show(reply.book);
+  // Пришли из находки — показываем именно её, а не место прошлого чтения.
+  if (at !== undefined) goToBlock(at);
 }
 
 function openFile(file: File): Promise<void> {

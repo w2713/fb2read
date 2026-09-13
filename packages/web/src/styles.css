@@ -281,6 +281,88 @@ body.dragging {
   color: var(--dim);
 }
 
+/* --- поиск по всей полке ---------------------------------------------------- */
+
+#shelf-find {
+  display: flex;
+  gap: 0.4rem;
+  max-width: var(--column);
+  margin-top: 1.5rem;
+  font: 0.95rem/1.3 system-ui, sans-serif;
+}
+
+#shelf-find input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+#shelf-find button {
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--accent);
+  border-radius: 0.4rem;
+  background: transparent;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+}
+
+#shelf-found-note {
+  margin: 0.5rem 0 0;
+}
+
+/* Находки одной книги: заголовок с названием и выдержки под ним. */
+.found-book {
+  margin-top: 1.2rem;
+  font-family: system-ui, sans-serif;
+}
+
+.found-book h3 {
+  margin: 0 0 0.2rem;
+  font-size: 1rem;
+}
+
+.found-book ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.found-book li {
+  border-top: 1px solid var(--rule);
+}
+
+.found-book li button {
+  display: block;
+  width: 100%;
+  padding: 0.5rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.found-book li button:hover {
+  color: var(--accent);
+}
+
+/* За столом находки ложатся в ту же сетку, что и полка: их бывает много. */
+@media (min-width: 48rem) {
+  #shelf-found {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(20rem, 1fr));
+    column-gap: 2rem;
+    align-items: start;
+  }
+}
+
 /* --- обмен с сервером ------------------------------------------------------ */
 
 #sync {

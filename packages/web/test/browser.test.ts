@@ -2086,3 +2086,184 @@ describe.skipIf(!CHROME)("оглавление деревом", () => {
     await page.close();
   }, SLOW);
 });
+
+/**
+ * Поиск по всей полке.
+ *
+ * Пределы и слова о ходе дела проверены без браузера; здесь то, чего без него
+ * не увидеть: перебор идёт в потоке разбора, находки появляются по книгам, а
+ * по находке книга открывается на своём месте.
+ */
+describe.skipIf(!CHROME)("поиск по полке", () => {
+  /** Книга, где искомое встречается через каждые `every` абзацев. */
+  function bookWith(title: string, every: number, count = 200): Uint8Array {
+    let body = "";
+    for (let i = 1; i <= count; i += 1) {
+      const found = every && i % every === 0 ? " старая мельница" : "";
+      body += `<p>Абзац номер ${i}. слово слово слово${found}.</p>`;
+    }
+    return new TextEncoder().encode(
+      '<?xml version="1.0" encoding="utf-8"?>' +
+        '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">' +
+        `<description><title-info><book-title>${title}</book-title></title-info></description>` +
+        `<body><section>${body}</section></body></FictionBook>`,
+    );
+  }
+
+  /** Кладёт книги на полку так, как это сделал бы читатель. */
+  async function fillShelf(page: Page, books: Array<[string, number]>): Promise<void> {
+    await page.goto(base);
+    for (const [title, every] of books) {
+      await give(page, `${title}.fb2`, bookWith(title, every));
+      await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+      await page.click("#close");
+      await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
+    }
+    await page.waitForFunction(
+      (n) => document.querySelectorAll("#shelf li").length === n,
+      books.length,
+      { timeout: 20_000 },
+    );
+  }
+
+  /** Ищет и дожидается конца перебора. */
+  async function findAll(page: Page, query: string): Promise<void> {
+    await page.fill("#shelf-q", query);
+    await page.click("#shelf-find button[type=submit]");
+    await page.waitForFunction(
+      () => /^(нашлось|ничего)/.test(document.getElementById("shelf-found-note")?.textContent ?? ""),
+      null,
+      { timeout: 60_000 },
+    );
+  }
+
+  it("находит в нескольких книгах и раскладывает находки по книгам", async () => {
+    const page = await browser.newPage();
+    await fillShelf(page, [
+      ["Обломов", 0],
+      ["Ревизор", 50],
+      ["Идиот", 0],
+      ["Бесы", 80],
+    ]);
+    await findAll(page, "старая мельница");
+
+    const книги = await page.$$eval(".found-book h3", (nodes) =>
+      nodes.map((node) => node.textContent),
+    );
+    // Только те две книги, где искомое и правда есть; недавно читанная — первой.
+    expect(книги).toEqual(["Бесы", "Ревизор"]);
+    expect(await page.$eval("#shelf-found-note", (n) => n.textContent)).toBe("нашлось 6");
+    await page.close();
+  }, SLOW);
+
+  it("чего нет ни в одной книге — так и сказано", async () => {
+    const page = await browser.newPage();
+    await fillShelf(page, [
+      ["Обломов", 0],
+      ["Идиот", 0],
+    ]);
+    await findAll(page, "старая мельница");
+
+    expect(await page.$eval("#shelf-found-note", (n) => n.textContent)).toBe("ничего не нашлось");
+    expect(await page.$$eval(".found-book", (nodes) => nodes.length)).toBe(0);
+    await page.close();
+  }, SLOW);
+
+  it("находка открывает книгу на своём месте", async () => {
+    const page = await browser.newPage();
+    await fillShelf(page, [
+      ["Обломов", 0],
+      ["Ревизор", 50],
+    ]);
+    await findAll(page, "старая мельница");
+
+    // Вторая находка в «Ревизоре» — сотый абзац.
+    await page.$$eval(".found-book li button", (nodes) => (nodes[1] as HTMLElement).click());
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await settled(page);
+
+    expect(await page.title()).toContain("Ревизор");
+    // Абзац с находкой — у верхнего края, а не место прошлого чтения.
+    const где = (await topBlock(page))!;
+    expect(Math.abs(где - 99)).toBeLessThanOrEqual(1);
+    await page.close();
+  }, SLOW);
+
+  it("по одной книге поля поиска нет", async () => {
+    // По единственной книге ищут, открыв её: поле там лишнее.
+    const page = await browser.newPage();
+    await fillShelf(page, [["Обломов", 50]]);
+    expect(await page.$eval("#shelf-find", (n) => n.hasAttribute("hidden"))).toBe(true);
+
+    await give(page, "Ревизор.fb2", bookWith("Ревизор", 50));
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await page.click("#close");
+    await page.waitForFunction(
+      () => !document.getElementById("shelf-find")!.hasAttribute("hidden"),
+      null,
+      { timeout: 10_000 },
+    );
+    await page.close();
+  }, SLOW);
+
+  it("по одной букве перебор не запускается", async () => {
+    // Совпало бы всё подряд, а стоило бы полного разбора всех книг.
+    const page = await browser.newPage();
+    await fillShelf(page, [
+      ["Обломов", 50],
+      ["Ревизор", 50],
+    ]);
+    await page.fill("#shelf-q", "а");
+    await page.click("#shelf-find button[type=submit]");
+    await page.waitForFunction(
+      () => (document.getElementById("shelf-found-note")?.textContent ?? "").includes("две буквы"),
+      null,
+      { timeout: 10_000 },
+    );
+    expect(await page.$$eval(".found-book", (nodes) => nodes.length)).toBe(0);
+    await page.close();
+  }, SLOW);
+
+  it("«Стоп» прекращает перебор", async () => {
+    // Вторая книга нарочно большая: пока она разбирается, у нажатия есть время
+    // попасть в перебор. С мелкими книгами проверка была негодной — к моменту
+    // нажатия перебор уже кончался, и кнопки на экране не оставалось.
+    const page = await browser.newPage();
+    await page.goto(base);
+    for (const [имя, абзацев] of [
+      ["Первая", 200],
+      ["Большая", 12_000],
+      ["Третья", 200],
+    ] as Array<[string, number]>) {
+      await give(page, `${имя}.fb2`, bookWith(имя, 3, абзацев));
+      await page.waitForSelector("#book:not([hidden])", { timeout: 30_000 });
+      await page.click("#close");
+      await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
+    }
+    await page.waitForFunction(() => document.querySelectorAll("#shelf li").length === 3, null, {
+      timeout: 20_000,
+    });
+
+    await page.fill("#shelf-q", "старая мельница");
+    await page.click("#shelf-find button[type=submit]");
+    // Первая книга просмотрена — значит, пошла вторая, большая.
+    await page.waitForFunction(
+      () =>
+        (document.getElementById("shelf-found-note")?.textContent ?? "").startsWith(
+          "просмотрено 1 из 3",
+        ),
+      null,
+      { timeout: 20_000 },
+    );
+    await page.click("#shelf-stop");
+
+    const сразу = await page.$eval("#shelf-found-note", (n) => n.textContent ?? "");
+    expect(сразу).toContain("остановлено");
+    // Счёт замер: без остановки за две секунды он ушёл бы дальше — большая
+    // книга разбирается полсекунды, а за ней ждёт третья.
+    await page.waitForTimeout(2000);
+    expect(await page.$eval("#shelf-found-note", (n) => n.textContent)).toBe(сразу);
+    expect(await page.$eval("#shelf-stop", (n) => n.hasAttribute("hidden"))).toBe(true);
+    await page.close();
+  }, SLOW);
+});
