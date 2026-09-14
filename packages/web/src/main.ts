@@ -153,6 +153,9 @@ worker.addEventListener("message", (event: MessageEvent<Reply>) => {
   waiting.delete(event.data.id);
 });
 
+/** Какая по счёту книга открывается: ответы на прежние просьбы уже не нужны. */
+let opened = 0;
+
 /** Спрашивает поток и ждёт именно свой ответ. */
 function ask(request: Ask): Promise<Reply> {
   const id = ++ticket;
@@ -1427,6 +1430,21 @@ function shelfRow(entry: ShelfEntry): HTMLElement {
 }
 
 /**
+ * Ждёт, пока браузеру станет нечем заняться.
+ *
+ * `requestIdleCallback` знают не все браузеры — в Safari его нет, — поэтому
+ * запасным путём идёт обычная задержка. Срок в полсекунды и там, и там: это
+ * не точность, а обещание, что полка и настройки встанут первыми.
+ */
+function idle(): Promise<void> {
+  return new Promise((resolve) => {
+    const later = window.requestIdleCallback;
+    if (later) later(() => resolve(), { timeout: 500 });
+    else window.setTimeout(resolve, 500);
+  });
+}
+
+/**
  * Перебор обложек у книг, легших на полку раньше.
  *
  * Обложка достаётся при открытии книги, но книги, прочитанные до этой версии,
@@ -1451,17 +1469,27 @@ function stopCovers(): void {
 async function sweepCovers(): Promise<void> {
   // Уже идёт — второй такой же только отнимал бы поток у первого.
   if (sweeping) return;
-  const known = await store.coversKnown();
-  const todo = (await store.shelf()).books.filter((book) => !known.has(book.hash));
-  if (!todo.length) return;
+  // Отметиться надо сразу, до первого ожидания: иначе открытая в этот миг
+  // книга не смогла бы перебор остановить — останавливать было бы нечего, — и
+  // он полез бы в поток разбора у неё из-под рук.
   const run = { stop: false };
   sweeping = run;
+  // Полке и настройкам дать встать первыми: обложки подождут, а вот полка,
+  // ждущая разбора чужой книги, читателю видна.
+  await idle();
+  if (run.stop) return;
+
+  const known = await store.coversKnown();
+  const todo = (await store.shelf()).books.filter((book) => !known.has(book.hash));
 
   for (const book of todo) {
     if (run.stop) return;
     const data = await store.bookFile(book.hash);
     // Книга пропала из хранилища — это не повод обрывать перебор по остальным.
     if (!data) continue;
+    // Ещё раз после чтения из хранилища: за это время читатель мог открыть
+    // книгу, и лезть в поток разбора уже нельзя.
+    if (run.stop) return;
     const reply = await ask({ kind: "cover", data, name: book.name });
     if (run.stop) return;
     if (!reply.ok || reply.kind !== "cover") continue;
@@ -2019,6 +2047,11 @@ async function show(book: ParsedBook): Promise<void> {
  * показ, сохранение на полку — одно и то же.
  */
 async function openBlob(data: Blob, name: string, at?: number): Promise<void> {
+  // Своя очередь, а не общий счётчик просьб к потоку: пока книга разбирается,
+  // поток спрашивают и о другом — об обложках книг с полки, — и по общему
+  // счётчику разобранная книга оказывалась бы «устаревшей» и не открывалась
+  // вовсе. Поймано в CI на возврате книги с сервера.
+  const mine = ++opened;
   start.querySelector(".failure")?.remove();
   // Поиск по полке и перебор обложек сами занимают поток разбора; открытая
   // книга важнее, и ждать их очереди она не должна.
@@ -2027,7 +2060,7 @@ async function openBlob(data: Blob, name: string, at?: number): Promise<void> {
   await closeOpen();
   const reply = await ask({ kind: "parse", data, name });
   // Пока читали, могли выбрать другую книгу: показываем только последнюю.
-  if (reply.id !== ticket) return;
+  if (mine !== opened) return;
   if (!reply.ok) {
     showFailure(`${name}: ${reply.error}`);
     return;
