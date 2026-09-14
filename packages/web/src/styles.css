@@ -230,7 +230,9 @@ body.dragging {
 .shelf-open {
   flex: 1;
   min-width: 0;
-  display: block;
+  display: flex;
+  gap: 0.7rem;
+  align-items: center;
   padding: 0.8rem 0;
   border: 0;
   background: transparent;
@@ -238,6 +240,37 @@ body.dragging {
   font: inherit;
   text-align: left;
   cursor: pointer;
+}
+
+/*
+ * Обложка книги.
+ *
+ * Ширина задана, а высота идёт от неё: у книжных обложек отношение сторон
+ * около двух к трём, и картинка подрезается до него, а не растягивается —
+ * растянутая обложка читается как испорченная.
+ */
+.shelf-cover {
+  flex: none;
+  width: 3rem;
+  aspect-ratio: 2 / 3;
+  object-fit: cover;
+  border-radius: 0.25rem;
+  background: var(--rule);
+}
+
+/* Книга без обложки: плитка с первой буквой названия держит ряд. */
+.shelf-blank {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--dim);
+  font: 500 1.3rem/1 system-ui, sans-serif;
+}
+
+/* Текст рядом с обложкой: ему и достаётся вся оставшаяся ширина. */
+.shelf-text {
+  flex: 1;
+  min-width: 0;
 }
 
 .shelf-title {

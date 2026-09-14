@@ -153,6 +153,9 @@ worker.addEventListener("message", (event: MessageEvent<Reply>) => {
   waiting.delete(event.data.id);
 });
 
+/** Какая по счёту книга открывается: ответы на прежние просьбы уже не нужны. */
+let opened = 0;
+
 /** Спрашивает поток и ждёт именно свой ответ. */
 function ask(request: Ask): Promise<Reply> {
   const id = ++ticket;
@@ -1312,6 +1315,16 @@ let cloudEntries: ShelfEntry[] = [];
 let shelfView: ShelfView = { ...DEFAULT_VIEW };
 
 /**
+ * Обложки, готовые к показу: отпечаток книги — ссылка на картинку.
+ *
+ * Ссылки временные и держатся, пока нарисована полка. Полка перерисовывается
+ * на каждое нажатие клавиши в поле отбора, поэтому собирать их заново каждый
+ * раз нельзя: браузер держит блоб, пока ссылку не отпустили, и полка на
+ * полусотне книг за минуту набора утекла бы в память целиком.
+ */
+let coverUrls = new Map<string, string>();
+
+/**
  * Читает полку из хранилища и рисует её.
  *
  * Хранилище трогается только здесь. Порядок и отбор меняются часто — отбор по
@@ -1322,8 +1335,23 @@ async function fillShelf(): Promise<void> {
   const { books, states } = await store.shelf();
   shelfEntries = shelfOrder(books, states);
   cloudEntries = await loadCloud();
+  showCovers(await store.covers());
   paintShelf();
   await showStorage(books);
+  // Книги, легшие на полку до того, как читалка научилась замечать обложки,
+  // своей картинки ещё не имеют. Их разбор идёт в стороне и полку не держит.
+  void sweepCovers();
+}
+
+/**
+ * Меняет набор ссылок на обложки, отпуская прежние.
+ *
+ * Отпускать обязательно: пока ссылка жива, браузер держит и саму картинку, а
+ * полка перерисовывается много раз за сеанс.
+ */
+function showCovers(covers: Map<string, Blob>): void {
+  for (const url of coverUrls.values()) URL.revokeObjectURL(url);
+  coverUrls = new Map([...covers].map(([hash, blob]) => [hash, URL.createObjectURL(blob)]));
 }
 
 /**
@@ -1367,6 +1395,9 @@ function shelfRow(entry: ShelfEntry): HTMLElement {
   const open = document.createElement("button");
   open.type = "button";
   open.className = "shelf-open";
+  open.append(coverTile(entry));
+  const text = document.createElement("span");
+  text.className = "shelf-text";
   const name = document.createElement("span");
   name.className = "shelf-title";
   name.textContent = entry.title;
@@ -1382,7 +1413,8 @@ function shelfRow(entry: ShelfEntry): HTMLElement {
   ]
     .filter(Boolean)
     .join(" · ");
-  open.append(name, about);
+  text.append(name, about);
+  open.append(text);
   open.addEventListener("click", () => void openStored(entry.hash));
 
   const drop = document.createElement("button");
@@ -1395,6 +1427,112 @@ function shelfRow(entry: ShelfEntry): HTMLElement {
 
   item.append(open, drop);
   return item;
+}
+
+/**
+ * Ждёт, пока браузеру станет нечем заняться.
+ *
+ * `requestIdleCallback` знают не все браузеры — в Safari его нет, — поэтому
+ * запасным путём идёт обычная задержка. Срок в полсекунды и там, и там: это
+ * не точность, а обещание, что полка и настройки встанут первыми.
+ */
+function idle(): Promise<void> {
+  return new Promise((resolve) => {
+    const later = window.requestIdleCallback;
+    if (later) later(() => resolve(), { timeout: 500 });
+    else window.setTimeout(resolve, 500);
+  });
+}
+
+/**
+ * Перебор обложек у книг, легших на полку раньше.
+ *
+ * Обложка достаётся при открытии книги, но книги, прочитанные до этой версии,
+ * так и остались бы без картинок — открывать их все ради обложки читатель не
+ * станет. Поэтому один раз, в стороне от полки, читалка проходит по книгам,
+ * которых ещё не смотрела.
+ *
+ * Дёшево это не выходит: обложка лежит в описании, а достать её можно только
+ * разобрав книгу — те же сотни миллисекунд, что и открытие. Поэтому перебор
+ * идёт по одной книге, в потоке разбора, и уступает дорогу всему, чего просит
+ * читатель: открытая книга и поиск по полке его останавливают. Результат
+ * записывается и для книг без обложки — отметкой «смотрели, нет», иначе тот же
+ * перебор шёл бы при каждом открытии полки.
+ */
+let sweeping: { stop: boolean } | null = null;
+
+function stopCovers(): void {
+  if (sweeping) sweeping.stop = true;
+  sweeping = null;
+}
+
+async function sweepCovers(): Promise<void> {
+  // Уже идёт — второй такой же только отнимал бы поток у первого.
+  if (sweeping) return;
+  // Отметиться надо сразу, до первого ожидания: иначе открытая в этот миг
+  // книга не смогла бы перебор остановить — останавливать было бы нечего, — и
+  // он полез бы в поток разбора у неё из-под рук.
+  const run = { stop: false };
+  sweeping = run;
+  // Полке и настройкам дать встать первыми: обложки подождут, а вот полка,
+  // ждущая разбора чужой книги, читателю видна.
+  await idle();
+  if (run.stop) return;
+
+  const known = await store.coversKnown();
+  const todo = (await store.shelf()).books.filter((book) => !known.has(book.hash));
+
+  for (const book of todo) {
+    if (run.stop) return;
+    const data = await store.bookFile(book.hash);
+    // Книга пропала из хранилища — это не повод обрывать перебор по остальным.
+    if (!data) continue;
+    // Ещё раз после чтения из хранилища: за это время читатель мог открыть
+    // книгу, и лезть в поток разбора уже нельзя.
+    if (run.stop) return;
+    const reply = await ask({ kind: "cover", data, name: book.name });
+    if (run.stop) return;
+    if (!reply.ok || reply.kind !== "cover") continue;
+    await store.putCover(book.hash, reply.image);
+    if (!reply.image) continue;
+    // Показываем сразу, не дожидаясь конца перебора: на полке в полсотни книг
+    // ждать пришлось бы минуту.
+    const was = coverUrls.get(book.hash);
+    if (was) URL.revokeObjectURL(was);
+    coverUrls.set(book.hash, URL.createObjectURL(reply.image));
+    paintShelf();
+  }
+
+  if (sweeping === run) sweeping = null;
+}
+
+/**
+ * Обложка книги — или то, что стоит на её месте.
+ *
+ * Обложка есть не у всякой книги, а полка рисуется сеткой: строка без картинки
+ * ломала бы её ряд. Поэтому вместо обложки встаёт плитка с первой буквой
+ * названия — она занимает то же место и книгу тоже узнают.
+ *
+ * Картинке пусто в `alt`: рядом уже стоит название, и читалке экрана незачем
+ * произносить его дважды.
+ */
+function coverTile(entry: ShelfEntry): HTMLElement {
+  const url = coverUrls.get(entry.hash);
+  if (url) {
+    const image = document.createElement("img");
+    image.className = "shelf-cover";
+    image.src = url;
+    image.alt = "";
+    // Полка бывает длинной: за экраном картинки не читаются вовсе.
+    image.loading = "lazy";
+    image.decoding = "async";
+    return image;
+  }
+  const blank = document.createElement("span");
+  blank.className = "shelf-cover shelf-blank";
+  blank.textContent = [...entry.title.trim()][0]?.toUpperCase() ?? "?";
+  blank.setAttribute("aria-hidden", "true");
+  return blank;
 }
 
 /** Порядки и отборы — списком и кнопками; строятся один раз. */
@@ -1504,13 +1642,22 @@ function cloudRow(entry: ShelfEntry): HTMLElement {
   const get = document.createElement("button");
   get.type = "button";
   get.className = "shelf-open";
+  // Облако стоит плиткой, на месте обложки: книги здесь нет, а ряд полки
+  // ломаться не должен.
+  const mark = document.createElement("span");
+  mark.className = "shelf-cover shelf-blank";
+  mark.textContent = "☁";
+  mark.setAttribute("aria-hidden", "true");
+  const text = document.createElement("span");
+  text.className = "shelf-text";
   const name = document.createElement("span");
   name.className = "shelf-title";
-  name.textContent = `☁ ${entry.title}`;
+  name.textContent = entry.title;
   const about = document.createElement("span");
   about.className = "shelf-about";
   about.textContent = [entry.author, "на сервере"].filter(Boolean).join(" · ");
-  get.append(name, about);
+  text.append(name, about);
+  get.append(mark, text);
   get.addEventListener("click", () => void returnBook(entry.hash));
 
   const forget = document.createElement("button");
@@ -1659,6 +1806,8 @@ function stopFinding(): void {
 
 async function findOnShelf(query: string): Promise<void> {
   stopFinding();
+  // Читатель попросил искать — перебор обложек подождёт: поток разбора один.
+  stopCovers();
   const run = { stop: false };
   finding = run;
   shelfFound.innerHTML = "";
@@ -1699,6 +1848,8 @@ async function findOnShelf(query: string): Promise<void> {
   if (finding === run) {
     finding = null;
     shelfStop.hidden = true;
+    // Поиск кончился — можно вернуться к обложкам, если они не все собраны.
+    void sweepCovers();
   }
 }
 
@@ -1771,6 +1922,11 @@ async function keepBook(data: Blob, name: string, book: ParsedBook): Promise<voi
       },
       data,
     );
+    // Обложка достаётся вместе с разбором, и класть её надо тут же: книга уже
+    // разобрана, а перебору пришлось бы разбирать её заново. Измерено на книге
+    // в 6000 абзацев: от «закрыть» до обложки на полке 258 мс, а если оставить
+    // её перебору — 563.
+    await store.putCover(book.hash, book.cover);
     // Просить о постоянном хранении есть смысл только когда есть что хранить.
     await navigator.storage?.persist?.().catch(() => false);
   } catch (e) {
@@ -1891,14 +2047,20 @@ async function show(book: ParsedBook): Promise<void> {
  * показ, сохранение на полку — одно и то же.
  */
 async function openBlob(data: Blob, name: string, at?: number): Promise<void> {
+  // Своя очередь, а не общий счётчик просьб к потоку: пока книга разбирается,
+  // поток спрашивают и о другом — об обложках книг с полки, — и по общему
+  // счётчику разобранная книга оказывалась бы «устаревшей» и не открывалась
+  // вовсе. Поймано в CI на возврате книги с сервера.
+  const mine = ++opened;
   start.querySelector(".failure")?.remove();
-  // Поиск по полке сам занимает поток разбора и ведёт свой счёт просьб к нему;
-  // открытая книга важнее, и ждать его очереди она не должна.
+  // Поиск по полке и перебор обложек сами занимают поток разбора; открытая
+  // книга важнее, и ждать их очереди она не должна.
   stopFinding();
+  stopCovers();
   await closeOpen();
   const reply = await ask({ kind: "parse", data, name });
   // Пока читали, могли выбрать другую книгу: показываем только последнюю.
-  if (reply.id !== ticket) return;
+  if (mine !== opened) return;
   if (!reply.ok) {
     showFailure(`${name}: ${reply.error}`);
     return;

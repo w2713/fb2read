@@ -31,6 +31,18 @@ const record = (block: number) => ({
   hash: КНИГА,
 });
 
+/** Книга на полке: байты и описание к ним. */
+const байты = (text: string) => new Blob([new TextEncoder().encode(text)]);
+const описание = (hash: string, extra = {}) => ({
+  hash,
+  name: "Каренина.fb2",
+  title: "Анна Каренина",
+  author: "Лев Толстой",
+  size: 12,
+  addedAt: 1000,
+  ...extra,
+});
+
 describe("позиция", () => {
   it("незнакомая книга открывается с начала", async () => {
     expect(await store.loadPosition(КНИГА)).toBe(0);
@@ -175,17 +187,6 @@ describe("недавние", () => {
 });
 
 describe("книги на полке", () => {
-  const байты = (text: string) => new Blob([new TextEncoder().encode(text)]);
-  const описание = (hash: string, extra = {}) => ({
-    hash,
-    name: "Каренина.fb2",
-    title: "Анна Каренина",
-    author: "Лев Толстой",
-    size: 12,
-    addedAt: 1000,
-    ...extra,
-  });
-
   it("книга кладётся и читается обратно", async () => {
     await store.putBook(описание(КНИГА), байты("это книга"));
     const back = await store.bookFile(КНИГА);
@@ -272,6 +273,42 @@ describe("книги на полке", () => {
   });
 });
 
+describe("обложки", () => {
+  const картинка = () => new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], { type: "image/png" });
+
+  it("кладутся и читаются обратно", async () => {
+    await store.putCover(КНИГА, картинка());
+    const cover = await store.cover(КНИГА);
+    expect(cover).not.toBeNull();
+    expect(cover!.type).toBe("image/png");
+  });
+
+  it("«обложки нет» — это не то же, что «ещё не смотрели»", async () => {
+    // Разница не праздная: без отметки читалка разбирала бы книгу без обложки
+    // заново при каждом открытии полки, а разбор стоит секунды.
+    expect(await store.coversKnown()).toEqual(new Set());
+    await store.putCover(КНИГА, null);
+    expect(await store.cover(КНИГА)).toBeNull();
+    expect(await store.coversKnown()).toEqual(new Set([КНИГА]));
+  });
+
+  it("отдаются полке все разом, и пустые в список не попадают", async () => {
+    await store.putCover(КНИГА, картинка());
+    await store.putCover(ДРУГАЯ, null);
+    const covers = await store.covers();
+    expect([...covers.keys()]).toEqual([КНИГА]);
+  });
+
+  it("уходят вместе с книгой", async () => {
+    await store.putBook(описание(КНИГА), байты("это книга"));
+    await store.putCover(КНИГА, картинка());
+    await store.dropBook(КНИГА);
+    expect(await store.cover(КНИГА)).toBeNull();
+    // И отметки не остаётся: книга вернётся — обложку посмотрим заново.
+    expect(await store.coversKnown()).toEqual(new Set());
+  });
+});
+
 describe("переход на вторую версию базы", () => {
   it("книги появляются, а места и закладки остаются", async () => {
     // База могла остаться от прошлого выпуска: стереть при обновлении места и
@@ -290,5 +327,22 @@ describe("переход на вторую версию базы", () => {
       new Blob(["три"]),
     );
     expect(await after.bookFile(ДРУГАЯ)).not.toBeNull();
+  });
+
+  it("обложки появляются, а книги и места остаются", async () => {
+    // То же и на четвёртой версии: хранилище обложек досоздаётся, а накопленное
+    // не трогается.
+    const name = `старая-${++counter}`;
+    const before = new IdbStore(name);
+    await before.putBook(описание(КНИГА), байты("это книга"));
+    await before.savePosition(КНИГА, record(42));
+    await before.close();
+
+    const after = new IdbStore(name);
+    expect(await after.loadPosition(КНИГА)).toBe(42);
+    expect(await after.bookFile(КНИГА)).not.toBeNull();
+    await after.putCover(КНИГА, new Blob(["картинка"], { type: "image/png" }));
+    expect(await after.cover(КНИГА)).not.toBeNull();
+    await after.close();
   });
 });

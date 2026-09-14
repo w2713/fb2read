@@ -95,6 +95,8 @@ export interface EpubResult {
   title: string;
   author: string;
   series: string;
+  /** Путь обложки внутри архива — тот же, каким читаются картинки книги. */
+  cover: string;
 }
 
 /** Разбирает EPUB из байтов архива. */
@@ -237,6 +239,16 @@ export function parseEpub(data: Uint8Array): EpubResult {
     }
   }
 
+  // Обложка помечается двояко. EPUB 3 ставит `properties="cover-image"` на
+  // сам файл; EPUB 2 такого не знал и писал в метаданных `<meta name="cover">`
+  // с идентификатором из перечня. Встречаются оба, поэтому читаем оба — сперва
+  // новый способ, он надёжнее: старый указывает на что угодно, в том числе на
+  // страницу с обложкой, а не на картинку.
+  const marked = Object.values(manifest).find((item) => item.props.includes("cover-image"));
+  const named = [...iter(opf)].find((el) => el.tag === "meta" && attr(el, "name") === "cover");
+  const byName = named ? manifest[attr(named, "content")] : undefined;
+  const cover = marked?.href ?? (byName?.type.startsWith("image/") ? byName.href : "");
+
   const documents = spine
     .filter((id) => id in manifest && manifest[id]!.type.includes("html"))
     .map((id) => manifest[id]!.href);
@@ -336,5 +348,5 @@ export function parseEpub(data: Uint8Array): EpubResult {
   }
   const finalToc = resolved.length >= 2 ? resolved.sort((a, b) => a.block - b.block) : toc;
 
-  return { blocks, toc: finalToc, anchors, repairs, title, author, series };
+  return { blocks, toc: finalToc, anchors, repairs, title, author, series, cover };
 }

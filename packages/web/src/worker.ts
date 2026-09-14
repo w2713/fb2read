@@ -29,6 +29,8 @@ export interface ParsedBook {
   /** Якоря сносок: идентификатор цели — номер блока с примечанием. */
   anchors: Book["anchors"];
   repairs: string[];
+  /** Обложка книги; её нет — значит, полке нечего показать. */
+  cover: Blob | null;
 }
 
 /** Одна находка в книге: где она и что вокруг неё написано. */
@@ -47,7 +49,11 @@ export type Request =
   // Поиск по книге с полки: разбираем, ищем и отдаём только находки. Сама
   // книга наружу не едет — незачем гонять между потоками мегабайты ради
   // десятка строк.
-  | { id: number; kind: "find"; data: Blob; name: string; query: string };
+  | { id: number; kind: "find"; data: Blob; name: string; query: string }
+  // Обложка книги, лежащей на полке. Отдельной просьбой — ради книг, которые
+  // легли на полку до того, как читалка научилась обложки замечать: открывать
+  // их все ради картинки читатель не станет.
+  | { id: number; kind: "cover"; data: Blob; name: string };
 
 /**
  * Просьба без номера.
@@ -62,10 +68,23 @@ export type Reply =
   | { id: number; ok: true; kind: "parse"; book: ParsedBook }
   | { id: number; ok: true; kind: "image"; image: Blob | null }
   | { id: number; ok: true; kind: "find"; hits: Hit[] }
+  | { id: number; ok: true; kind: "cover"; image: Blob | null }
   | { id: number; ok: false; error: string };
 
 /** Последняя разобранная книга: из неё и достаются картинки. */
 let current: Book | null = null;
+
+/**
+ * Картинка Blob'ом.
+ *
+ * Blob переживает передачу между потоками, и основному потоку остаётся только
+ * показать его, ничего не пересобирая. Приведение — из-за описания Uint8Array в
+ * ядре: он объявлен над ArrayBufferLike, куда формально входит и разделяемая
+ * память, которой тут взяться неоткуда.
+ */
+function asBlob(image: { data: Uint8Array; mime: string } | null): Blob | null {
+  return image ? new Blob([image.data as BlobPart], { type: image.mime || "image/jpeg" }) : null;
+}
 
 async function handle(request: Request): Promise<Reply> {
   if (request.kind === "parse") {
@@ -85,8 +104,18 @@ async function handle(request: Request): Promise<Reply> {
         toc: book.toc,
         anchors: book.anchors,
         repairs: book.repairs,
+        // Обложка достаётся сразу: книга уже разобрана, а второй раз ради
+        // картинки её разбирать было бы вдвое дороже самого открытия.
+        cover: asBlob(await book.coverData()),
       },
     };
+  }
+
+  if (request.kind === "cover") {
+    // `current` не трогаем по той же причине, что и в поиске по полке: там
+    // лежит книга, которую читают, и из неё достаются иллюстрации.
+    const book = await Book.open(new BrowserFileSource(request.data, request.name));
+    return { id: request.id, ok: true, kind: "cover", image: asBlob(await book.coverData()) };
   }
 
   if (request.kind === "find") {
@@ -111,17 +140,7 @@ async function handle(request: Request): Promise<Reply> {
   }
 
   const image = current ? await current.imageData(request.src) : null;
-  return {
-    id: request.id,
-    ok: true,
-    kind: "image",
-    // Blob собирается здесь: он переживает передачу между потоками, и основному
-    // потоку остаётся только показать его, ничего не пересобирая.
-    // Приведение — из-за описания Uint8Array в ядре: он объявлен над
-    // ArrayBufferLike, куда формально входит и разделяемая память, которой тут
-    // взяться неоткуда.
-    image: image ? new Blob([image.data as BlobPart], { type: image.mime || "image/jpeg" }) : null,
-  };
+  return { id: request.id, ok: true, kind: "image", image: asBlob(image) };
 }
 
 self.addEventListener("message", (event: MessageEvent<Request>) => {
