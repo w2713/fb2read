@@ -111,11 +111,24 @@ export class IdbStore implements StateStore {
     return typeof block === "number" && Number.isFinite(block) ? block : 0;
   }
 
+  /**
+   * Записывает место, не трогая закладок.
+   *
+   * Чтение и запись — одной транзакцией, и это не аккуратность ради
+   * аккуратности. Читать в одной, а писать в другой значит терять чужие
+   * правки: пока эта запись читала прежнее, соседняя успела положить своё, и
+   * оно исчезает под нашим. Здесь это стоило бы закладки, поставленной в тот
+   * же миг, когда книгу закрывали. IndexedDB выстраивает транзакции на запись
+   * в очередь, поэтому внутри одной прочитанное остаётся верным до конца.
+   */
   async savePosition(key: string, record: PositionRecord): Promise<void> {
-    const previous = await this.entry(key);
+    const tx = (await this.db).transaction("state", "readwrite");
+    const state = tx.objectStore("state");
     // Закладки переживают запись позиции: она случается на каждой прокрутке,
     // а закладки к прокрутке отношения не имеют.
-    await (await this.db).put("state", { ...record, bookmarks: previous?.bookmarks ?? [] }, key);
+    const previous = await state.get(key);
+    await state.put({ ...record, bookmarks: previous?.bookmarks ?? [] }, key);
+    await tx.done;
   }
 
   async loadBookmarks(key: string): Promise<Bookmark[]> {
@@ -124,8 +137,11 @@ export class IdbStore implements StateStore {
     return marks.filter((m): m is Bookmark => !!m && typeof m.block === "number");
   }
 
+  /** Записывает закладки, не трогая места; той же одной транзакцией. */
   async saveBookmarks(key: string, marks: Bookmark[], meta: Partial<PositionRecord>): Promise<void> {
-    const entry: PositionRecord = (await this.entry(key)) ?? {
+    const tx = (await this.db).transaction("state", "readwrite");
+    const state = tx.objectStore("state");
+    const entry: PositionRecord = (await state.get(key)) ?? {
       block: 0,
       title: meta.title ?? "",
       author: meta.author ?? "",
@@ -138,17 +154,29 @@ export class IdbStore implements StateStore {
     entry.bookmarks = marks
       .filter((m): m is Bookmark => !!m && typeof m.block === "number")
       .sort((a, b) => a.block - b.block);
-    await (await this.db).put("state", entry, key);
+    await state.put(entry, key);
+    await tx.done;
   }
 
   async loadSettings(): Promise<Settings> {
     return (await (await this.db).get("settings", "reader")) ?? {};
   }
 
+  /**
+   * Дописывает настройки — и тоже одной транзакцией.
+   *
+   * Настройки лежат одной записью, и правят их подряд: выбрал ширину, тут же
+   * интервал, тут же выключку. Три записи начинаются раньше, чем кончается
+   * первая, и если каждая читает прежнее отдельно, первая настройка пропадает
+   * молча. Поймано в CI: из трёх выбранных настроек после перезагрузки не
+   * стало ширины.
+   */
   async saveSettings(patch: Settings): Promise<void> {
-    const db = await this.db;
-    const current = (await db.get("settings", "reader")) ?? {};
-    await db.put("settings", { ...current, ...patch }, "reader");
+    const tx = (await this.db).transaction("settings", "readwrite");
+    const settings = tx.objectStore("settings");
+    const current = (await settings.get("reader")) ?? {};
+    await settings.put({ ...current, ...patch }, "reader");
+    await tx.done;
   }
 
   /**
@@ -261,9 +289,13 @@ export class IdbStore implements StateStore {
    * читатель мог поставить ещё одну, и затирать её нельзя.
    */
   async applyState(key: string, state: SyncState): Promise<void> {
-    const previous = await this.entry(key);
-    await (await this.db).put(
-      "state",
+    // Одной транзакцией — по той же причине, что и место с закладками: обмен
+    // идёт в стороне от чтения, и закладка, поставленная ровно в это время,
+    // иначе пропала бы между чтением прежней записи и записью пришедшей.
+    const tx = (await this.db).transaction("state", "readwrite");
+    const store = tx.objectStore("state");
+    const previous = await store.get(key);
+    await store.put(
       {
         block: state.block,
         title: state.title || previous?.title || "",
@@ -276,5 +308,6 @@ export class IdbStore implements StateStore {
       },
       key,
     );
+    await tx.done;
   }
 }
