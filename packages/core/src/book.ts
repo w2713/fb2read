@@ -34,6 +34,8 @@ export class Book {
   anchors: Record<string, number> = {};
   /** Отпечаток содержимого: по нему книга узнаётся на другом устройстве. */
   hash = "";
+  /** Обложка: имя вложения в FB2 либо путь в архиве EPUB; пусто — её нет. */
+  cover = "";
 
   private images: BinaryIndex = {};
   private zipped = false;
@@ -56,6 +58,7 @@ export class Book {
       book.title = parsed.title;
       book.author = parsed.author;
       book.series = parsed.series;
+      book.cover = parsed.cover;
     } else {
       book.format = "FB2";
       book.zipped = isZip(raw);
@@ -67,6 +70,7 @@ export class Book {
       book.title = meta.title;
       book.author = meta.author;
       book.series = meta.series;
+      book.cover = meta.cover;
       const body = parseFb2Bodies(parsed.root);
       book.blocks = body.blocks;
       book.toc = body.toc;
@@ -79,6 +83,11 @@ export class Book {
     if (!book.blocks.length) throw new Error("в файле не найдено текста книги");
     if (!book.title) book.title = source.name;
     return book;
+  }
+
+  /** Байты обложки; её нет — значит, и показывать нечего. */
+  coverData(): Promise<ImageData | null> {
+    return this.imageData(this.cover);
   }
 
   /** Байты картинки и её тип; читаются только в момент показа. */

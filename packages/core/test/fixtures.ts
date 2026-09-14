@@ -125,7 +125,7 @@ const OPF = `<?xml version="1.0" encoding="utf-8"?>
 <item id="c1" href="text/ch1.xhtml" media-type="application/xhtml+xml"/>
 <item id="c2" href="text/ch2.xhtml" media-type="application/xhtml+xml"/>
 <item id="nt" href="text/notes.xhtml" media-type="application/xhtml+xml"/>
-<item id="img" href="images/cover.jpg" media-type="image/jpeg"/>
+<item id="img" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>
 </manifest>
 <spine><itemref idref="c1"/><itemref idref="c2"/><itemref idref="nt"/></spine>
 </package>`;
@@ -176,7 +176,11 @@ const NCX = `<?xml version="1.0" encoding="utf-8"?>
 const OPF_NCX = OPF.replace(
   '<item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>',
   '<item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>',
-);
+)
+  // EPUB 2 о `properties` не знал: обложка называлась в метаданных по
+  // идентификатору из перечня.
+  .replace(' properties="cover-image"', "")
+  .replace("</metadata>", '<meta name="cover" content="img"/></metadata>');
 
 const EPUB_FILES: Record<string, string> = {
   "META-INF/container.xml": CONTAINER,
@@ -209,6 +213,10 @@ function makeEpub(files: Record<string, string>): Uint8Array {
 
 /** EPUB 3: навигация, списки, цитата и сноска в отдельном файле. */
 export const epubBytes = (): Uint8Array => makeEpub(EPUB_FILES);
+
+/** Тот же EPUB, но с описанием, переписанным на свой лад. */
+export const makeEpubWith = (edit: (opf: string) => string): Uint8Array =>
+  makeEpub({ ...EPUB_FILES, "OEBPS/content.opf": edit(OPF) });
 
 /** Старый EPUB 2: оглавление только в NCX. */
 export const epubNcxBytes = (): Uint8Array => makeEpub(EPUB_FILES_NCX);
@@ -304,6 +312,20 @@ export function pictureBook(): string {
   );
 }
 
+/** FB2 с обложкой: она лежит в описании, а не в тексте книги. */
+export function coverBook(): string {
+  return (
+    HEAD("utf-8") +
+    "<description><title-info><book-title>С обложкой</book-title>" +
+    '<coverpage><image l:href="#cover.png"/></coverpage>' +
+    "</title-info></description><body><section>" +
+    "<title><p>Глава</p></title><p>Текст книги.</p></section></body>" +
+    '<binary id="cover.png" content-type="image/png">' +
+    base64(png(4, 6, [20, 90, 160])) +
+    "</binary></FictionBook>"
+  );
+}
+
 // ------------------------------------------------------------ помощники
 
 /** Книга из текста XML. */
@@ -334,5 +356,6 @@ export const wideBook = (): Promise<Book> => bookFromText(WIDE, "wide.fb2");
 export const bigBookParsed = (): Promise<Book> => bookFromText(bigBook(), "big.fb2");
 export const epubBook = (): Promise<Book> => bookFromBytes(epubBytes(), "book.epub");
 export const epubNcxBook = (): Promise<Book> => bookFromBytes(epubNcxBytes(), "old.epub");
+export const coverBookParsed = (): Promise<Book> => bookFromText(coverBook(), "cover.fb2");
 export const pictureBookParsed = (): Promise<Book> =>
   bookFromText(pictureBook(), "picture.fb2");

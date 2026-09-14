@@ -2546,3 +2546,157 @@ describe.skipIf(!CHROME)("полка: порядок и отбор", () => {
     await page.close();
   }, SLOW);
 });
+
+describe.skipIf(!CHROME)("обложки на полке", () => {
+  /** Книга с обложкой: она лежит в описании, а не в тексте. */
+  function withCover(title: string, count = 30): Uint8Array {
+    let body = "";
+    for (let i = 1; i <= count; i += 1) body += `<p>Абзац номер ${i} книги ${title}.</p>`;
+    return new TextEncoder().encode(
+      '<?xml version="1.0" encoding="utf-8"?>' +
+        '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0" ' +
+        'xmlns:l="http://www.w3.org/1999/xlink">' +
+        "<description><title-info>" +
+        `<book-title>${title}</book-title>` +
+        '<coverpage><image l:href="#cover.png"/></coverpage>' +
+        "</title-info></description>" +
+        `<body><section>${body}</section></body>` +
+        `<binary id="cover.png" content-type="image/png">${TALL_PNG_BASE64}</binary>` +
+        "</FictionBook>",
+    );
+  }
+
+  /** Книга без обложки. */
+  function without(title: string): Uint8Array {
+    let body = "";
+    for (let i = 1; i <= 30; i += 1) body += `<p>Абзац номер ${i} книги ${title}.</p>`;
+    return new TextEncoder().encode(
+      '<?xml version="1.0" encoding="utf-8"?>' +
+        '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">' +
+        `<description><title-info><book-title>${title}</book-title>` +
+        "</title-info></description>" +
+        `<body><section>${body}</section></body></FictionBook>`,
+    );
+  }
+
+  /** Кладёт книгу на полку так, как это сделал бы читатель. */
+  async function shelve(page: Page, name: string, bytes: Uint8Array): Promise<void> {
+    await give(page, name, bytes);
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await page.click("#close");
+    await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
+  }
+
+  /** Стирает запомненные обложки — и картинки, и отметки «её нет». */
+  function clearCovers(page: Page): Promise<void> {
+    return page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          const request = indexedDB.open("fb2read");
+          request.onsuccess = () => {
+            const tx = request.result.transaction("covers", "readwrite");
+            tx.objectStore("covers").clear();
+            tx.oncomplete = () => resolve();
+          };
+        }),
+    );
+  }
+
+  /** Сколько книг уже смотрели на обложку — считая тех, у кого её нет. */
+  function coverKeys(page: Page): Promise<number> {
+    return page.evaluate(
+      () =>
+        new Promise<number>((resolve) => {
+          const request = indexedDB.open("fb2read");
+          request.onsuccess = () => {
+            const keys = request.result.transaction("covers").objectStore("covers").getAllKeys();
+            keys.onsuccess = () => resolve(keys.result.length);
+          };
+        }),
+    );
+  }
+
+  /** Настоящий размер картинки на полке: по нему видно, что это та самая. */
+  function coverSize(page: Page): Promise<{ w: number; h: number } | null> {
+    return page.$eval("img.shelf-cover", (node) => {
+      const image = node as HTMLImageElement;
+      return image.complete ? { w: image.naturalWidth, h: image.naturalHeight } : null;
+    });
+  }
+
+  it("обложка книги видна на полке", async () => {
+    const page = await browser.newPage();
+    await page.goto(base);
+    await shelve(page, "С обложкой.fb2", withCover("С обложкой"));
+
+    await page.waitForSelector("img.shelf-cover", { timeout: 10_000 });
+    // Та самая картинка из книги, а не что-нибудь своё: 600×3000 — размер
+    // вложения, и другого такого на странице нет.
+    await expect.poll(() => coverSize(page), { timeout: 5000 }).toEqual({ w: 600, h: 3000 });
+    await page.close();
+  }, SLOW);
+
+  it("у книги без обложки стоит плитка с первой буквой названия", async () => {
+    const page = await browser.newPage();
+    await page.goto(base);
+    await shelve(page, "Голая.fb2", without("Голая"));
+
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+    // Ряд полки не должен ломаться из-за книги без картинки, а по букве книгу
+    // всё равно узнают.
+    expect(await page.$$eval("img.shelf-cover", (n) => n.length)).toBe(0);
+    expect(await page.textContent(".shelf-blank")).toBe("Г");
+    await page.close();
+  }, SLOW);
+
+  it("обложка переживает перезагрузку и лежит в хранилище", async () => {
+    const page = await browser.newPage();
+    await page.goto(base);
+    await shelve(page, "С обложкой.fb2", withCover("С обложкой"));
+    await page.waitForSelector("img.shelf-cover", { timeout: 10_000 });
+
+    await page.reload();
+    await page.waitForSelector("#start:not([hidden])", { timeout: 20_000 });
+    // Книга при этом не открывалась: картинка взялась из хранилища, а не из
+    // разбора.
+    await expect.poll(() => coverSize(page), { timeout: 10_000 }).toEqual({ w: 600, h: 3000 });
+    await page.close();
+  }, SLOW);
+
+  it("обложка находится и у книги, легшей на полку раньше", async () => {
+    const page = await browser.newPage();
+    await page.goto(base);
+    await shelve(page, "Старая.fb2", withCover("Старая"));
+    await page.waitForSelector("img.shelf-cover", { timeout: 10_000 });
+
+    // Стираем обложки: так выглядит полка, собранная до того, как читалка
+    // научилась их замечать. Книга остаётся, картинки о ней нет.
+    await clearCovers(page);
+
+    await page.reload();
+    await page.waitForSelector("#shelf li", { timeout: 20_000 });
+    // Читатель книгу не открывал — её разобрал перебор обложек в стороне.
+    await expect.poll(() => coverSize(page), { timeout: 30_000 }).toEqual({ w: 600, h: 3000 });
+    await page.close();
+  }, SLOW);
+
+  it("книга без обложки второй раз не разбирается", async () => {
+    const page = await browser.newPage();
+    await page.goto(base);
+    await shelve(page, "Голая.fb2", without("Голая"));
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+
+    // Стираем отметки и перезагружаемся: так перебор обложек проходит по этой
+    // книге сам, без открытия её читателем.
+    await clearCovers(page);
+    await page.reload();
+    await page.waitForSelector("#shelf li", { timeout: 20_000 });
+
+    // Отметка «смотрели, обложки нет» — не то же, что её отсутствие: без неё
+    // читалка разбирала бы такую книгу при каждом открытии полки, а разбор
+    // стоит сотен миллисекунд на каждую.
+    await expect.poll(() => coverKeys(page), { timeout: 20_000 }).toBe(1);
+    expect(await coverKeys(page)).toBe(1);
+    await page.close();
+  }, SLOW);
+});

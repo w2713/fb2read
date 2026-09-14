@@ -23,7 +23,7 @@ import {
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 
 const NAME = "fb2read";
-const VERSION = 3;
+const VERSION = 4;
 
 /**
  * Книга, оставшаяся в браузере, — всё, кроме самих байтов.
@@ -56,6 +56,14 @@ interface Schema extends DBSchema {
   /** Сами байты, отдельно от описаний. */
   files: { key: string; value: Blob };
   /**
+   * Обложки: ключ — отпечаток книги, значение — картинка либо пусто.
+   *
+   * Пустое значение здесь не то же, что отсутствие записи: оно значит «искали,
+   * обложки нет». Без этой разницы читалка перебирала бы книги без обложек при
+   * каждом открытии полки — а перебор стоит полного разбора книги.
+   */
+  covers: { key: string; value: Blob | null };
+  /**
    * Книги, снятые с этой полки: ключ — отпечаток, значение — когда сняли.
    *
    * Без этого списка «убрать» не работает вовсе: обмен видит, что книги на
@@ -80,6 +88,7 @@ export function openState(name = NAME): Promise<IDBPDatabase<Schema>> {
       if (!db.objectStoreNames.contains("books")) db.createObjectStore("books");
       if (!db.objectStoreNames.contains("files")) db.createObjectStore("files");
       if (!db.objectStoreNames.contains("dropped")) db.createObjectStore("dropped");
+      if (!db.objectStoreNames.contains("covers")) db.createObjectStore("covers");
     },
   });
 }
@@ -227,6 +236,37 @@ export class IdbStore implements StateStore {
     await tx.done;
   }
 
+  /**
+   * Кладёт обложку книги — или отметку, что её нет.
+   *
+   * Отметка не менее важна, чем картинка: по ней видно, что книгу уже смотрели
+   * и разбирать её второй раз незачем.
+   */
+  async putCover(hash: string, cover: Blob | null): Promise<void> {
+    await (await this.db).put("covers", cover, hash);
+  }
+
+  /** Обложка книги; её нет — значит, нечего и показывать. */
+  async cover(hash: string): Promise<Blob | null> {
+    return (await (await this.db).get("covers", hash)) ?? null;
+  }
+
+  /** Все обложки разом: полка рисуется целиком, и ходить за каждой накладно. */
+  async covers(): Promise<Map<string, Blob>> {
+    const out = new Map<string, Blob>();
+    const db = await this.db;
+    for (const hash of await db.getAllKeys("covers")) {
+      const cover = await db.get("covers", hash);
+      if (cover) out.set(hash, cover);
+    }
+    return out;
+  }
+
+  /** Книги, которые на обложку уже смотрели: нашлась она или нет. */
+  async coversKnown(): Promise<Set<string>> {
+    return new Set(await (await this.db).getAllKeys("covers"));
+  }
+
   /** Байты книги; описания без байтов не бывает, а вот наоборот — бывает. */
   async bookFile(hash: string): Promise<Blob | null> {
     return (await (await this.db).get("files", hash)) ?? null;
@@ -244,9 +284,12 @@ export class IdbStore implements StateStore {
    * следующего обмена. Вернув ту же книгу, читатель попадёт туда, где бросил.
    */
   async dropBook(hash: string): Promise<void> {
-    const tx = (await this.db).transaction(["books", "files", "dropped"], "readwrite");
+    const tx = (await this.db).transaction(["books", "files", "covers", "dropped"], "readwrite");
     await tx.objectStore("books").delete(hash);
     await tx.objectStore("files").delete(hash);
+    // Обложка уходит вместе с книгой: держать картинку от книги, которой на
+    // полке нет, — значит занимать место впустую.
+    await tx.objectStore("covers").delete(hash);
     // Отметка о снятии — в той же сделке, что и удаление: иначе между ними
     // мог бы влезть обмен и вернуть книгу обратно.
     await tx.objectStore("dropped").put(Date.now() / 1000, hash);

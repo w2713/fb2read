@@ -14,6 +14,8 @@ export interface Fb2Meta {
   title: string;
   author: string;
   series: string;
+  /** Имя вложения с обложкой — то же, что у `<image>` в тексте, без решётки. */
+  cover: string;
 }
 
 /** Результат обхода тела книги. */
@@ -29,6 +31,7 @@ export function fb2Meta(root: XmlEl): Fb2Meta {
   let title = "";
   let author = "";
   let series = "";
+  let cover = "";
   for (const desc of iter(root)) {
     if (desc.tag !== "title-info") continue;
     for (const el of desc.children) {
@@ -45,11 +48,17 @@ export function fb2Meta(root: XmlEl): Fb2Meta {
         const name = attr(el, "name");
         const num = attr(el, "number");
         series = name ? `${name} #${num}`.trim() : "";
+      } else if (tag === "coverpage" && !cover) {
+        // Обложка лежит в описании, а не в тексте, поэтому читалке она
+        // попадается только здесь. Внутри — тот же `<image>`, что и в книге,
+        // и ссылается он на то же вложение.
+        const image = [...iter(el)].find((child) => child.tag === "image");
+        cover = image ? attr(image, "href").replace(/^#+/, "") : "";
       }
     }
     break;
   }
-  return { title, author, series };
+  return { title, author, series, cover };
 }
 
 const BODY_NAMES: Readonly<Record<string, string>> = {
