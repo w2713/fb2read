@@ -10,7 +10,7 @@ import { parseArgs } from "node:util";
 import { IMAGE_BACKENDS, THEME_ORDER, type ImageBackend, type Theme } from "@fb2read/core";
 
 export const APP = "fb2read";
-export const VERSION = "0.26.0";
+export const VERSION = "0.27.0";
 
 /** Команды синхронизации: первое слово, а не ключ. */
 export const COMMANDS = ["sync", "push", "pull", "remote", "forget"] as const;
