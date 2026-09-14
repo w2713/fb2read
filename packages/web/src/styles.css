@@ -281,6 +281,79 @@ body.dragging {
   color: var(--dim);
 }
 
+/* --- порядок и отбор на полке ---------------------------------------------- */
+
+#shelf-view {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem 0.9rem;
+  align-items: center;
+  margin-top: 1.5rem;
+  font: 0.95rem/1.3 system-ui, sans-serif;
+}
+
+#shelf-name {
+  /* Растёт вместе с окном, но не во всю ширину полки: название книги короче
+     монитора, а поле во весь экран выглядит полем для чего-то другого. */
+  flex: 1 1 10rem;
+  min-width: 0;
+  max-width: 20rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+#shelf-order-box {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  color: var(--dim);
+}
+
+#shelf-order {
+  padding: 0.35rem 0.4rem;
+  border: 1px solid var(--rule);
+  border-radius: 0.4rem;
+  background: var(--bg);
+  color: var(--fg);
+  font: inherit;
+}
+
+#shelf-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+
+.shelf-kind {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--rule);
+  border-radius: 1rem;
+  background: transparent;
+  color: var(--dim);
+  font: inherit;
+  cursor: pointer;
+}
+
+/* Отбор, который стоит сейчас. */
+.shelf-kind[aria-pressed="true"] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+/* Пустой отбор виден, но не зовёт: ходить туда незачем. */
+.shelf-kind:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+#shelf-none {
+  margin: 0.9rem 0 0;
+}
+
 /* --- поиск по всей полке ---------------------------------------------------- */
 
 #shelf-find {

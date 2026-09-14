@@ -66,6 +66,22 @@ import {
 } from "./sync.js";
 import { bookSize, shelfOrder, whenRead, type ShelfEntry } from "./shelf.js";
 import { capHits, findOrder, progressLine, worthFinding } from "./shelffind.js";
+import {
+  DEFAULT_VIEW,
+  KINDS,
+  KIND_NAMES,
+  ORDERS,
+  ORDER_NAMES,
+  arrangeShelf,
+  inKind,
+  kindOf,
+  matchBook,
+  orderOf,
+  shelfCounts,
+  type ShelfKind,
+  type ShelfOrder,
+  type ShelfView,
+} from "./shelfview.js";
 import { entryAt, hasDepth, nestToc, type TocNode } from "./toc.js";
 import type { Ask, Hit, ParsedBook, Reply } from "./worker.js";
 
@@ -105,6 +121,11 @@ const shelfQuery = document.querySelector<HTMLInputElement>("#shelf-q")!;
 const shelfStop = document.querySelector<HTMLButtonElement>("#shelf-stop")!;
 const shelfFoundNote = document.querySelector<HTMLElement>("#shelf-found-note")!;
 const shelfFound = document.querySelector<HTMLElement>("#shelf-found")!;
+const shelfViewBox = document.querySelector<HTMLElement>("#shelf-view")!;
+const shelfName = document.querySelector<HTMLInputElement>("#shelf-name")!;
+const shelfOrderPick = document.querySelector<HTMLSelectElement>("#shelf-order")!;
+const shelfKindsBox = document.querySelector<HTMLElement>("#shelf-kinds")!;
+const shelfNone = document.querySelector<HTMLElement>("#shelf-none")!;
 const greeting = document.querySelector<HTMLElement>("#greeting")!;
 const storageLine = document.querySelector<HTMLElement>("#storage")!;
 const installLine = document.querySelector<HTMLElement>("#install")!;
@@ -1281,102 +1302,227 @@ function nextTheme(current: string): string {
 
 // --- полка -----------------------------------------------------------------
 
+/** Книги на полке: из этого списка и строится всё, что читатель на ней видит. */
+let shelfEntries: ShelfEntry[] = [];
+
+/** Снятые книги: они лежат на сервере, а не здесь. */
+let cloudEntries: ShelfEntry[] = [];
+
+/** Как читатель хочет видеть полку: порядок, отбор и набранное в поле. */
+let shelfView: ShelfView = { ...DEFAULT_VIEW };
+
 /**
- * Рисует список книг, оставшихся в браузере.
+ * Читает полку из хранилища и рисует её.
+ *
+ * Хранилище трогается только здесь. Порядок и отбор меняются часто — отбор по
+ * названию на каждое нажатие клавиши, — и ходить за книгами в IndexedDB каждый
+ * раз незачем: рисование идёт по уже прочитанному списку.
+ */
+async function fillShelf(): Promise<void> {
+  const { books, states } = await store.shelf();
+  shelfEntries = shelfOrder(books, states);
+  cloudEntries = await loadCloud();
+  paintShelf();
+  await showStorage(books);
+}
+
+/**
+ * Рисует список книг так, как читатель просил его видеть.
  *
  * Пока полка пуста, приглашение обычное; как только на ней что-то есть,
  * главным становится список, а выбор файла — способом добавить ещё одну.
  */
-async function fillShelf(): Promise<void> {
-  const { books, states } = await store.shelf();
-  const entries = shelfOrder(books, states);
+function paintShelf(): void {
+  const shown = arrangeShelf(shelfEntries, shelfView);
+  // Снятые книги идут в конце и порядком не перемешиваются: это не то, что
+  // можно открыть прямо сейчас, а то, за чем надо сходить в сеть. Отбор к ним
+  // применяется тот же: книга, которую ищут по названию, должна найтись и
+  // тогда, когда она осталась на сервере.
+  const cloud = cloudEntries.filter(
+    (entry) => inKind(entry, shelfView.kind) && matchBook(entry, shelfView.query),
+  );
+
   shelf.innerHTML = "";
-  // По единственной книге ищут, открыв её: поле поиска по полке там лишнее.
-  shelfFind.hidden = entries.length < 2;
-  greeting.textContent = entries.length
+  for (const entry of shown) shelf.append(shelfRow(entry));
+  for (const entry of cloud) shelf.append(cloudRow(entry));
+
+  const books = shelfEntries.length + cloudEntries.length;
+  // По единственной книге ищут, открыв её, и раскладывать одну книгу незачем:
+  // и поиск по полке, и порядок с отбором появляются вместе со второй.
+  shelfFind.hidden = shelfEntries.length < 2;
+  shelfViewBox.hidden = books < 2;
+  showKinds();
+  // Пустой список без объяснения читается как «книги пропали».
+  shelfNone.hidden = !books || shown.length + cloud.length > 0;
+  shelfNone.textContent = "Под это ничего не подошло.";
+  greeting.textContent = books
     ? "Ваши книги. Они остаются здесь и открываются без сети."
     : "Читалка книг FB2 и EPUB. Откройте книгу с устройства.";
-
-  for (const entry of entries) {
-    const item = document.createElement("li");
-
-    const open = document.createElement("button");
-    open.type = "button";
-    open.className = "shelf-open";
-    const name = document.createElement("span");
-    name.className = "shelf-title";
-    name.textContent = entry.title;
-    const about = document.createElement("span");
-    about.className = "shelf-about";
-    // Процент читателю важнее размера, поэтому он идёт первым; ни разу не
-    // открытая книга процента не имеет — у неё и места в книге ещё нет.
-    about.textContent = [
-      entry.percent === null ? "не открыта" : `${entry.percent}%`,
-      entry.author,
-      whenRead(entry.at),
-      bookSize(entry.size),
-    ]
-      .filter(Boolean)
-      .join(" · ");
-    open.append(name, about);
-    open.addEventListener("click", () => void openStored(entry.hash));
-
-    const drop = document.createElement("button");
-    drop.type = "button";
-    drop.className = "shelf-drop";
-    drop.title = "Убрать книгу";
-    drop.setAttribute("aria-label", `Убрать книгу: ${entry.title}`);
-    drop.textContent = "✕";
-    drop.addEventListener("click", () => void dropBook(entry.hash));
-
-    item.append(open, drop);
-    shelf.append(item);
-  }
-
-  await fillDropped();
-  await showStorage(books);
 }
+
+/** Книга на полке: название, строка о ней и крестик. */
+function shelfRow(entry: ShelfEntry): HTMLElement {
+  const item = document.createElement("li");
+
+  const open = document.createElement("button");
+  open.type = "button";
+  open.className = "shelf-open";
+  const name = document.createElement("span");
+  name.className = "shelf-title";
+  name.textContent = entry.title;
+  const about = document.createElement("span");
+  about.className = "shelf-about";
+  // Процент читателю важнее размера, поэтому он идёт первым; ни разу не
+  // открытая книга процента не имеет — у неё и места в книге ещё нет.
+  about.textContent = [
+    entry.percent === null ? "не открыта" : `${entry.percent}%`,
+    entry.author,
+    whenRead(entry.at),
+    bookSize(entry.size),
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  open.append(name, about);
+  open.addEventListener("click", () => void openStored(entry.hash));
+
+  const drop = document.createElement("button");
+  drop.type = "button";
+  drop.className = "shelf-drop";
+  drop.title = "Убрать книгу";
+  drop.setAttribute("aria-label", `Убрать книгу: ${entry.title}`);
+  drop.textContent = "✕";
+  drop.addEventListener("click", () => void dropBook(entry.hash));
+
+  item.append(open, drop);
+  return item;
+}
+
+/** Порядки и отборы — списком и кнопками; строятся один раз. */
+const kindButtons = new Map<ShelfKind, HTMLButtonElement>();
+
+for (const order of ORDERS) {
+  const option = document.createElement("option");
+  option.value = order;
+  option.textContent = ORDER_NAMES[order];
+  shelfOrderPick.append(option);
+}
+
+for (const kind of KINDS) {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "shelf-kind";
+  button.addEventListener("click", () => void chooseKind(kind));
+  kindButtons.set(kind, button);
+  shelfKindsBox.append(button);
+}
+
+/**
+ * Обновляет кнопки отборов.
+ *
+ * Кнопки не пересобираются, а переписываются: пересборка уносила бы из-под
+ * читателя ту самую кнопку, по которой он только что щёлкнул, — а с клавиатуры
+ * это значит потерянный фокус.
+ */
+function showKinds(): void {
+  // Числа считаются по набранному в поле, а не по всей полке: иначе кнопка
+  // обещала бы шесть книг, а показывала две — те, что подошли под отбор.
+  const книги = [...shelfEntries, ...cloudEntries].filter((entry) =>
+    matchBook(entry, shelfView.query),
+  );
+  const counts = shelfCounts(книги);
+  for (const [kind, button] of kindButtons) {
+    button.textContent = `${KIND_NAMES[kind]} ${counts[kind]}`;
+    // Нажатая кнопка — не только про цвет: без aria-pressed голосом не понять,
+    // какой отбор стоит.
+    button.setAttribute("aria-pressed", String(kind === shelfView.kind));
+    // Пустой отбор — тупик, и предлагать его как выбор нечестно. Тот, что стоит
+    // сейчас, остаётся нажимаемым: иначе из пустой полки некуда возвращаться.
+    button.disabled = !counts[kind] && kind !== shelfView.kind;
+  }
+  shelfOrderPick.value = shelfView.order;
+}
+
+/** Выбранный отбор запоминается: через день читатель ждёт ту же полку. */
+async function chooseKind(kind: ShelfKind): Promise<void> {
+  shelfView = { ...shelfView, kind };
+  paintShelf();
+  await store.saveSettings({ shelfKind: kind });
+}
+
+/** Порядок — так же. */
+async function chooseShelfOrder(order: ShelfOrder): Promise<void> {
+  shelfView = { ...shelfView, order };
+  paintShelf();
+  await store.saveSettings({ shelfOrder: order });
+}
+
+shelfOrderPick.addEventListener("change", () => {
+  void chooseShelfOrder(orderOf(shelfOrderPick.value));
+});
+
+// Набранное в поле не запоминается нарочно: это одно движение, а не настройка.
+// Застав его на полке в другой день, читатель решил бы, что книги пропали.
+shelfName.addEventListener("input", () => {
+  shelfView = { ...shelfView, query: shelfName.value };
+  paintShelf();
+});
 
 /**
  * Снятые книги — облаком, как в терминале.
  *
  * Иначе «убрать» значило бы «спрятать навсегда»: файла на устройстве уже нет,
- * а обмен книгу больше не вернёт. Строка строится по местной записи о месте —
- * она остаётся после снятия, — поэтому список рисуется и без сети.
+ * а обмен книгу больше не вернёт. Список строится по местным записям о месте —
+ * они остаются после снятия, — поэтому он рисуется и без сети.
  */
-async function fillDropped(): Promise<void> {
+async function loadCloud(): Promise<ShelfEntry[]> {
   // Без сервера возвращать книгу неоткуда, и обещать это нечестно.
-  if (!server) return;
+  if (!server) return [];
+  const out: ShelfEntry[] = [];
   for (const hash of await store.dropped()) {
     const record = await store.record(hash);
     if (!record) continue;
-
-    const item = document.createElement("li");
-    item.className = "shelf-remote";
-
-    const get = document.createElement("button");
-    get.type = "button";
-    get.className = "shelf-open";
-    const name = document.createElement("span");
-    name.className = "shelf-title";
-    name.textContent = `☁ ${record.title || "книга"}`;
-    const about = document.createElement("span");
-    about.className = "shelf-about";
-    about.textContent = [record.author, "на сервере"].filter(Boolean).join(" · ");
-    get.append(name, about);
-    get.addEventListener("click", () => void returnBook(hash));
-
-    const forget = document.createElement("button");
-    forget.type = "button";
-    forget.className = "shelf-drop";
-    forget.title = "Удалить с сервера";
-    forget.setAttribute("aria-label", `Удалить с сервера: ${record.title || "книга"}`);
-    forget.textContent = "✕";
-    forget.addEventListener("click", () => void forgetOnServer(hash, record.title));
-
-    item.append(get, forget);
-    shelf.append(item);
+    out.push({
+      hash,
+      title: record.title || "книга",
+      author: record.author,
+      percent: progressPercent(record.block, record.total),
+      // Размера у снятой книги нет: файла здесь больше нет, а на полке она
+      // места не занимает.
+      size: 0,
+      at: record.at,
+      read: true,
+    });
   }
+  return out;
+}
+
+/** Снятая книга: за ней надо сходить в сеть. */
+function cloudRow(entry: ShelfEntry): HTMLElement {
+  const item = document.createElement("li");
+  item.className = "shelf-remote";
+
+  const get = document.createElement("button");
+  get.type = "button";
+  get.className = "shelf-open";
+  const name = document.createElement("span");
+  name.className = "shelf-title";
+  name.textContent = `☁ ${entry.title}`;
+  const about = document.createElement("span");
+  about.className = "shelf-about";
+  about.textContent = [entry.author, "на сервере"].filter(Boolean).join(" · ");
+  get.append(name, about);
+  get.addEventListener("click", () => void returnBook(entry.hash));
+
+  const forget = document.createElement("button");
+  forget.type = "button";
+  forget.className = "shelf-drop";
+  forget.title = "Удалить с сервера";
+  forget.setAttribute("aria-label", `Удалить с сервера: ${entry.title}`);
+  forget.textContent = "✕";
+  forget.addEventListener("click", () => void forgetOnServer(entry.hash, entry.title));
+
+  item.append(get, forget);
+  return item;
 }
 
 /** Возвращает снятую книгу с сервера и открывает её. */
@@ -2014,6 +2160,14 @@ void store.loadSettings().then((settings) => {
   hyphens = flagOf(settings["hyphens"], true);
   paintLook();
   showPrefs();
+  // Полка: порядок и отбор читатель выбрал в прошлый раз. Настройки приходят
+  // не раньше книг, поэтому полку перерисовываем — сама она об этом не узнает.
+  shelfView = {
+    ...shelfView,
+    order: orderOf(settings["shelfOrder"]),
+    kind: kindOf(settings["shelfKind"]),
+  };
+  paintShelf();
 });
 
 // Версия — на первом экране. С домашнего экрана адресной строки нет, и узнать,

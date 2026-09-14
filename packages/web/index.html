@@ -161,6 +161,26 @@
         <p id="shelf-found-note" class="hint" hidden></p>
         <div id="shelf-found" hidden></div>
 
+        <!-- Чем разложить полку и что на ней показать. Появляется вместе со
+             второй книгой: одну книгу не сортируют и не отбирают. Список
+             порядков и отборов заполняется из shelfview.ts, чтобы названия
+             лежали в одном месте с самими правилами. -->
+        <div id="shelf-view" hidden>
+          <input
+            id="shelf-name"
+            type="search"
+            placeholder="Название или автор"
+            autocomplete="off"
+            aria-label="Оставить на полке книги по названию или автору"
+          />
+          <label id="shelf-order-box">
+            Порядок
+            <select id="shelf-order"></select>
+          </label>
+          <div id="shelf-kinds" role="group" aria-label="Какие книги показывать"></div>
+        </div>
+        <p id="shelf-none" class="hint" hidden></p>
+
         <!-- Книга остаётся в браузере: искать её в «Файлах» второй раз никто
              не станет, а на телефоне это и вовсе конец всей затее. -->
         <ul id="shelf"></ul>
