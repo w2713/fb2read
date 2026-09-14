@@ -296,6 +296,10 @@ async function findEverywhere(
     // Пауза перед каждой книгой: разбор держит поток целиком, и без неё
     // нажатие «прекратить» дошло бы только в самом конце перебора.
     await new Promise((resume) => setImmediate(resume));
+    // И ещё раз после паузы: как раз в ней нажатие и доходит. Без этой
+    // проверки «прекратить», нажатое во время разбора книги, опаздывало на
+    // целую книгу — CI поймал это на macOS, где перебор успевал уйти дальше.
+    if (finder.stopped || finder.done) break;
     let book: Book | null = null;
     try {
       book = await Book.open(new FileSource(entry.path));
