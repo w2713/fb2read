@@ -74,6 +74,18 @@ describe("закладки", () => {
     expect((await store.loadBookmarks(КНИГА)).map((m) => m.block)).toEqual([3, 9]);
   });
 
+  it("не пропадает под записью места, начатой в тот же миг", async () => {
+    // Так и бывает: закладку ставят и тут же закрывают книгу — запись места
+    // идёт следом, а читает она прежнюю запись. Если читать одной транзакцией,
+    // а писать другой, закладка исчезает молча.
+    await Promise.all([
+      store.saveBookmarks(КНИГА, [{ block: 7, at: 1 }], { title: "Книга" }),
+      store.savePosition(КНИГА, record(120)),
+    ]);
+    expect((await store.loadBookmarks(КНИГА)).map((m) => m.block)).toEqual([7]);
+    expect(await store.loadPosition(КНИГА)).toBe(120);
+  });
+
   it("мусор в записи не рушит чтение", async () => {
     await store.saveBookmarks(КНИГА, [null, { block: 4, at: 1 }] as never, { title: "Книга" });
     expect((await store.loadBookmarks(КНИГА)).map((m) => m.block)).toEqual([4]);
@@ -89,6 +101,19 @@ describe("настройки", () => {
     await store.saveSettings({ theme: "night" });
     await store.saveSettings({ spacing: 2 });
     expect(await store.loadSettings()).toEqual({ theme: "night", spacing: 2 });
+  });
+
+  it("не теряются, когда правки идут одна за другой, не дожидаясь записи", async () => {
+    // Так и настраивают: выбрал ширину, тут же интервал, тут же выключку — три
+    // записи начинаются раньше, чем кончается первая. Если каждая читает
+    // прежнее и кладёт своё поверх, первая настройка пропадает молча. Поймано
+    // в CI: из трёх выбранных настроек после перезагрузки не стало ширины.
+    await Promise.all([
+      store.saveSettings({ width: 26 }),
+      store.saveSettings({ spacing: 3 }),
+      store.saveSettings({ justify: false }),
+    ]);
+    expect(await store.loadSettings()).toEqual({ width: 26, spacing: 3, justify: false });
   });
 });
 
@@ -113,6 +138,17 @@ describe("состояние с сервера", () => {
     // Между отправкой и ответом читатель мог поставить ещё одну.
     await store.saveBookmarks(КНИГА, [{ block: 3, at: 100, name: "моя" }], { title: "Книга" });
     await store.applyState(КНИГА, пришло({ bookmarks: [{ block: 7, at: 200, name: "с телефона" }] }));
+    const marks = await store.loadBookmarks(КНИГА);
+    expect(marks.map((m) => m.name).sort()).toEqual(["моя", "с телефона"]);
+  });
+
+  it("закладка, поставленная в тот же миг, переживает приход с сервера", async () => {
+    // Обмен идёт в стороне от чтения: ответ сервера может лечь ровно тогда,
+    // когда читатель нажал «закладку».
+    await Promise.all([
+      store.saveBookmarks(КНИГА, [{ block: 3, at: 100, name: "моя" }], { title: "Книга" }),
+      store.applyState(КНИГА, пришло({ bookmarks: [{ block: 7, at: 200, name: "с телефона" }] })),
+    ]);
     const marks = await store.loadBookmarks(КНИГА);
     expect(marks.map((m) => m.name).sort()).toEqual(["моя", "с телефона"]);
   });
