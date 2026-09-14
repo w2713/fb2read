@@ -17,6 +17,10 @@ import {
   normalize,
   plural,
   progressPercent,
+  capHits,
+  findOrder,
+  progressLine,
+  worthFinding,
   type Bookmark,
   type Match,
   type TocEntry,
@@ -65,7 +69,7 @@ import {
   type SyncSettings,
 } from "./sync.js";
 import { bookSize, shelfOrder, whenRead, type ShelfEntry } from "./shelf.js";
-import { capHits, findOrder, progressLine, worthFinding } from "./shelffind.js";
+
 import {
   DEFAULT_VIEW,
   KINDS,

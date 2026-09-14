@@ -1,20 +1,20 @@
 /**
- * Поиск по полке: пределы, порядок и слова о ходе дела.
+ * Поиск по библиотеке: пределы, порядок и слова о ходе дела.
  *
- * Сам поиск — в ядре и проверен там; здесь то, что решается про полку целиком.
+ * Сам поиск — в ядре и проверен там; здесь то, что решается про библиотеку целиком.
  */
 
 import { describe, expect, it } from "vitest";
-import type { ShelfEntry } from "../src/shelf.js";
-import { MIN_QUERY, PER_BOOK, capHits, findOrder, progressLine, worthFinding } from "../src/shelffind.js";
+import { MIN_QUERY, PER_BOOK, capHits, findOrder, progressLine, worthFinding } from "../src/libfind.js";
 
-function entry(title: string, at: number): ShelfEntry {
-  return { hash: title, title, author: "", percent: null, at, read: true, size: 1 };
+/** Книга для перебора: важно в ней только время последнего чтения. */
+function entry(title: string, at: number): { title: string; at: number } {
+  return { title, at };
 }
 
 describe("стоит ли искать", () => {
   it("одна буква — не запрос", () => {
-    // Совпадёт всё подряд, а стоить будет полного перебора полки.
+    // Совпадёт всё подряд, а стоить будет полного перебора библиотеки.
     expect(worthFinding("а")).toBe(false);
     expect(worthFinding("  о  ")).toBe(false);
   });

@@ -10,6 +10,10 @@ import { basename, resolve } from "node:path";
 import {
   Book,
   bookKey,
+  capHits,
+  findMatches,
+  matchContext,
+  progressLine,
   progressPercent,
   type Bookmark,
   type ImageBackend,
@@ -19,6 +23,7 @@ import {
 import { FileSource } from "../fsSource.js";
 import type { Terminal } from "../term/terminal.js";
 import { Chooser, type ChooserEntry } from "./chooser.js";
+import { Finder, type FoundPick } from "./finder.js";
 import { readBook } from "./read.js";
 import { Session } from "./session.js";
 import { Theme } from "./theme.js";
@@ -107,6 +112,17 @@ export async function runLibrary(
       }
       await session.show(chooser);
       let path = chooser.picked;
+
+      // Поиск по всем книгам сразу: находка сама говорит, что открывать и на
+      // каком абзаце. Отказались от находок — возвращаемся к списку.
+      let startAt: number | null = null;
+      if (chooser.query) {
+        const found = await findEverywhere(session, chooser.query, entries, prefs);
+        if (!found) continue;
+        path = found.path;
+        startAt = found.block;
+      }
+
       if (path === null) return prefs;
 
       // Книга с сервера: сначала её надо забрать. Список остаётся на экране
@@ -142,7 +158,8 @@ export async function runLibrary(
 
       const full = resolve(path);
       const key = await bookKey(full, source.size);
-      const start = fromStart ? 0 : await store.loadPosition(key);
+      // Место в книге: обычно запомненное, но пришли из находки — значит, к ней.
+      const start = startAt ?? (fromStart ? 0 : await store.loadPosition(key));
       const bookmarks = await store.loadBookmarks(key);
 
       if (options.keep) {
@@ -227,4 +244,96 @@ export async function runLibrary(
   } finally {
     session.end();
   }
+}
+
+/**
+ * В каких книгах вообще есть что искать.
+ *
+ * Книги, которые лежат только на сервере, пропускаются: искать в том, чего нет
+ * на диске, нечем, а скачивать всю библиотеку ради поиска — самоуправство. В
+ * счёт просмотренных они тоже не идут: обещать перебор по книге, которой тут
+ * нет, значит врать читателю о том, где искали.
+ */
+export function searchQueue<T extends { path: string; remote?: string }>(
+  entries: readonly T[],
+): T[] {
+  return entries.filter((entry) => entry.path && !entry.remote);
+}
+
+/**
+ * Перебирает книги библиотеки в поисках слова.
+ *
+ * Указателя нет и не заводится: вся цена поиска — в разборе книги (измерено:
+ * 408 мс разбора против 93 мс самого поиска на книге в 2.3 МБ), а указатель
+ * стоил бы второй копии библиотеки на диске. Поэтому книги разбираются по
+ * одной, находки показываются по мере готовности, и перебор можно прекратить,
+ * не дожидаясь конца, — первая находка обычно появляется раньше, чем читатель
+ * успеет об этом подумать.
+ *
+ * Порядок обхода — от недавно читанных: ищут обычно в том, что читают. Он
+ * задан списком, который уже отсортирован по времени.
+ */
+async function findEverywhere(
+  session: Session,
+  query: string,
+  entries: readonly ChooserEntry[],
+  prefs: LibraryPrefs,
+): Promise<FoundPick | null> {
+  const finder = new Finder(query, new Theme(prefs.theme), prefs.mouse, {
+    requestPaint: () => session.paint(),
+  });
+  const queue = searchQueue(entries);
+  let done = 0;
+  let found = 0;
+  finder.say(progressLine(done, queue.length, found));
+
+  // Экран показывается, но не дожидается: пока читатель смотрит на находки,
+  // перебор идёт дальше и подкладывает новые.
+  const shown = session.show(finder);
+
+  for (const entry of queue) {
+    if (finder.stopped || finder.done) break;
+    // Пауза перед каждой книгой: разбор держит поток целиком, и без неё
+    // нажатие «прекратить» дошло бы только в самом конце перебора.
+    await new Promise((resume) => setImmediate(resume));
+    let book: Book | null = null;
+    try {
+      book = await Book.open(new FileSource(entry.path));
+    } catch {
+      // Битая книга не обрывает перебор по остальным: о ней читатель узнает,
+      // когда попробует её открыть.
+    }
+    done += 1;
+    if (!book) {
+      finder.say(progressLine(done, queue.length, found));
+      continue;
+    }
+    const matches = findMatches(book.blocks, query);
+    const { shown: hits, more } = capHits(matches);
+    found += matches.length;
+    const total = Math.max(book.blocks.length - 1, 1);
+    // Находки и счёт кладутся разом: иначе строка внизу мигала бы пустотой
+    // между ними.
+    finder.add(
+      matches.length
+        ? {
+            path: entry.path,
+            title: book.title,
+            author: book.author,
+            hits: hits.map(({ block, offset }) => ({
+              block,
+              percent: Math.round((100 * block) / total),
+              text: matchContext(book.blocks[block]!, offset),
+            })),
+            more,
+          }
+        : null,
+      progressLine(done, queue.length, found),
+    );
+  }
+
+  const прервано = finder.stopped && done < queue.length;
+  finder.ended(progressLine(done, queue.length, found) + (прервано ? " · остановлено" : ""));
+  await shown;
+  return finder.picked;
 }
