@@ -2304,3 +2304,245 @@ describe.skipIf(!CHROME)("поиск по полке", () => {
     await page.close();
   }, SLOW);
 });
+
+describe.skipIf(!CHROME)("полка: порядок и отбор", () => {
+  /**
+   * Книга с названием и автором.
+   *
+   * Абзацев по умолчанию четыреста, и это не запас на всякий случай: процент
+   * считается по абзацу у верхнего края, поэтому конец книги не даёт ста
+   * процентов. Измерено в этом же браузере: 200 абзацев в конце — 95 %, 400 —
+   * 98 %, 3000 — 100 %. Чтобы проверка про «дочитанные» говорила о правиле, а
+   * не о длине книги, книга должна конец заведомо доставать.
+   */
+  function book(title: string, author: string, count = 400): Uint8Array {
+    let body = "";
+    for (let i = 1; i <= count; i += 1) body += `<p>Абзац номер ${i} книги ${title}.</p>`;
+    return new TextEncoder().encode(
+      '<?xml version="1.0" encoding="utf-8"?>' +
+        '<FictionBook xmlns="http://www.gribuser.ru/xml/fictionbook/2.0">' +
+        "<description><title-info>" +
+        `<book-title>${title}</book-title>` +
+        `<author><last-name>${author}</last-name></author>` +
+        "</title-info></description>" +
+        `<body><section>${body}</section></body></FictionBook>`,
+    );
+  }
+
+  /**
+   * Кладёт книги на полку так, как это сделал бы читатель.
+   *
+   * Порядок важен: книги добавляются по очереди, и последняя оказывается на
+   * полке первой — она свежее всех.
+   */
+  async function putOnShelf(page: Page, books: Array<[string, string]>): Promise<void> {
+    await page.goto(base);
+    for (const [title, author] of books) {
+      await give(page, `${title}.fb2`, book(title, author));
+      await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+      await page.click("#close");
+      await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
+    }
+    await page.waitForFunction(
+      (n) => document.querySelectorAll("#shelf li").length === n,
+      books.length,
+      { timeout: 20_000 },
+    );
+  }
+
+  /** Что стоит на полке сверху вниз. */
+  function shelfTitles(page: Page): Promise<string[]> {
+    return page.$$eval("#shelf .shelf-title", (nodes) => nodes.map((n) => n.textContent ?? ""));
+  }
+
+  /** Выбирает порядок списком, как читатель. */
+  async function choose(page: Page, order: string): Promise<void> {
+    await page.selectOption("#shelf-order", order);
+  }
+
+  it("по названию раскладывает полку по алфавиту", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [
+      ["Обломов", "Гончаров"],
+      ["Анна Каренина", "Толстой"],
+      ["Бесы", "Достоевский"],
+    ]);
+    // Сначала лента: последнее читанное сверху — так полка выглядела всегда.
+    expect(await shelfTitles(page)).toEqual(["Бесы", "Анна Каренина", "Обломов"]);
+
+    await choose(page, "title");
+    expect(await shelfTitles(page)).toEqual(["Анна Каренина", "Бесы", "Обломов"]);
+    await page.close();
+  }, SLOW);
+
+  it("по автору книги одного автора становятся рядом", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [
+      ["Детство", "Толстой"],
+      ["Обломов", "Гончаров"],
+      ["Анна Каренина", "Толстой"],
+    ]);
+
+    await choose(page, "author");
+    // Гончаров раньше Толстого, а два Толстых — по названию, а не по тому,
+    // какого из них открывали позже.
+    expect(await shelfTitles(page)).toEqual(["Обломов", "Анна Каренина", "Детство"]);
+    await page.close();
+  }, SLOW);
+
+  it("поле оставляет на полке только подходящее", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [
+      ["Обломов", "Гончаров"],
+      ["Детство", "Толстой"],
+      ["Анна Каренина", "Толстой"],
+    ]);
+
+    // Отбор идёт по набранному сразу, без кнопки: список короткий, и ответ
+    // должен приходить на каждую букву.
+    await page.fill("#shelf-name", "толстой");
+    await expect.poll(() => shelfTitles(page), { timeout: 5000 }).toEqual([
+      "Анна Каренина",
+      "Детство",
+    ]);
+    // Числа на кнопках считаются по набранному: иначе «Все 3» стояло бы над
+    // списком из двух книг.
+    expect(await page.$eval("#shelf-kinds button:nth-child(1)", (n) => n.textContent)).toBe(
+      "Все 2",
+    );
+
+    // Половины названия хватает, и регистр не важен.
+    await page.fill("#shelf-name", "ОБЛОМ");
+    await expect.poll(() => shelfTitles(page), { timeout: 5000 }).toEqual(["Обломов"]);
+
+    // Пустое поле возвращает всю полку.
+    await page.fill("#shelf-name", "");
+    await expect.poll(() => shelfTitles(page).then((t) => t.length), { timeout: 5000 }).toBe(3);
+    await page.close();
+  }, SLOW);
+
+  it("дочитанное отбирается кнопкой, и число на ней то самое", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [
+      ["Обломов", "Гончаров"],
+      ["Бесы", "Достоевский"],
+    ]);
+
+    // «Бесы» дочитаны до конца, «Обломов» только положен на полку.
+    await page.click("#shelf .shelf-open");
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await settled(page);
+    await page.keyboard.press("End");
+    await page.waitForFunction(
+      () => {
+        const шкала = document.querySelector("#progress")!.textContent ?? "";
+        return Number.parseInt(шкала, 10) >= 95;
+      },
+      null,
+      { timeout: 15_000 },
+    );
+    await page.click("#close");
+    await page.waitForSelector("#start:not([hidden])", { timeout: 10_000 });
+
+    await expect
+      .poll(() => page.$eval("#shelf-kinds button:nth-child(4)", (n) => n.textContent), {
+        timeout: 5000,
+      })
+      .toBe("Дочитанные 1");
+    await page.click("#shelf-kinds button:nth-child(4)");
+    expect(await shelfTitles(page)).toEqual(["Бесы"]);
+
+    // «Не начатые» — «Обломов»: его открыли, но с первого абзаца не двинулись,
+    // а в браузере книгу открывают тем же движением, каким кладут на полку.
+    await page.click("#shelf-kinds button:nth-child(3)");
+    expect(await shelfTitles(page)).toEqual(["Обломов"]);
+    await page.close();
+  }, SLOW);
+
+  it("пустой отбор не предлагается кнопкой", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [
+      ["Обломов", "Гончаров"],
+      ["Бесы", "Достоевский"],
+    ]);
+    // Ни одна книга не дочитана — ходить в этот отбор незачем, и кнопка не
+    // притворяется выходом.
+    expect(await page.$eval("#shelf-kinds button:nth-child(4)", (n) => n.textContent)).toBe(
+      "Дочитанные 0",
+    );
+    const пуст = await page.$eval("#shelf-kinds button:nth-child(4)", (n) =>
+      (n as HTMLButtonElement).disabled,
+    );
+    expect(пуст).toBe(true);
+    await page.close();
+  }, SLOW);
+
+  it("под отбор ничего не подошло — так и сказано", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [
+      ["Обломов", "Гончаров"],
+      ["Бесы", "Достоевский"],
+    ]);
+
+    await page.fill("#shelf-name", "чехов");
+    await expect.poll(() => shelfTitles(page).then((t) => t.length), { timeout: 5000 }).toBe(0);
+    // Пустой список без объяснения читается как «книги пропали».
+    expect(await page.$eval("#shelf-none", (n) => n.hasAttribute("hidden"))).toBe(false);
+    expect(await page.textContent("#shelf-none")).toContain("ничего не подошло");
+    await page.close();
+  }, SLOW);
+
+  it("выбранный порядок переживает перезагрузку", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [
+      ["Обломов", "Гончаров"],
+      ["Анна Каренина", "Толстой"],
+      ["Бесы", "Достоевский"],
+    ]);
+    await choose(page, "title");
+
+    await page.reload();
+    await page.waitForSelector("#start:not([hidden])", { timeout: 20_000 });
+    await expect.poll(() => shelfTitles(page), { timeout: 10_000 }).toEqual([
+      "Анна Каренина",
+      "Бесы",
+      "Обломов",
+    ]);
+    // И список показывает то, чем разложено, а не своё первое значение.
+    expect(await page.$eval("#shelf-order", (n: HTMLSelectElement) => n.value)).toBe("title");
+    await page.close();
+  }, SLOW);
+
+  it("набранное в поле на другой день не остаётся", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [
+      ["Обломов", "Гончаров"],
+      ["Бесы", "Достоевский"],
+    ]);
+    await page.fill("#shelf-name", "бесы");
+    await expect.poll(() => shelfTitles(page).then((t) => t.length), { timeout: 5000 }).toBe(1);
+
+    await page.reload();
+    await page.waitForSelector("#start:not([hidden])", { timeout: 20_000 });
+    // Иначе читатель решил бы, что книги пропали: отбор по названию — это одно
+    // движение, а не настройка.
+    await expect.poll(() => shelfTitles(page).then((t) => t.length), { timeout: 10_000 }).toBe(2);
+    expect(await page.$eval("#shelf-name", (n: HTMLInputElement) => n.value)).toBe("");
+    await page.close();
+  }, SLOW);
+
+  it("по одной книге порядок и отбор не показываются", async () => {
+    const page = await browser.newPage();
+    await putOnShelf(page, [["Обломов", "Гончаров"]]);
+    // Одну книгу не раскладывают и не отбирают — как и не ищут по полке.
+    expect(await page.$eval("#shelf-view", (n) => n.hasAttribute("hidden"))).toBe(true);
+
+    await give(page, "Бесы.fb2", book("Бесы", "Достоевский"));
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await page.click("#close");
+    await expect
+      .poll(() => page.$eval("#shelf-view", (n) => n.hasAttribute("hidden")), { timeout: 10_000 })
+      .toBe(false);
+    await page.close();
+  }, SLOW);
+});
