@@ -5,7 +5,7 @@
  * «записали и прочитали», но и точная форма JSON.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -142,5 +142,54 @@ describe("список недавних", () => {
     const recent = await store.recent();
     expect(recent.map((e) => e.title)).toEqual(["Вторая", "Первая"]);
     expect(recent[1]!.percent).toBe(10);
+  });
+});
+
+describe("запись файла", () => {
+  it("идёт через временное имя, а не поверх прежнего файла", async () => {
+    // Прямая запись оставляет при обрыве половину файла, а в нём лежат
+    // позиции и закладки всех книг разом: разбор половины не удаётся, и
+    // читалка начинает с чистого листа — то есть теряет всё накопленное.
+    // Переименование же атомарно: либо прежний файл, либо новый.
+    //
+    // Видно это по номеру узла: переименование подставляет новый файл, а
+    // запись поверх оставляет прежний. На Windows номера узлов нет, и там
+    // проверяется хотя бы то, что после записи не остаётся мусора.
+    await store.savePosition("ключ", record(10));
+    const было = statSync(path).ino;
+    await store.savePosition("ключ", record(20));
+    const стало = statSync(path).ino;
+    if (было !== 0 && стало !== 0) expect(стало).not.toBe(было);
+    expect(readdirSync(dir)).toEqual(["positions.json"]);
+  });
+
+  it("неудача записи не рушит читалку, но и не молчит", async () => {
+    // Путь, которого не может быть: positions.json лежит внутри файла.
+    const занято = join(dir, "файл");
+    writeFileSync(занято, "не каталог");
+    const упрямый = new JsonFileStore(join(занято, "positions.json"));
+    await упрямый.savePosition("ключ", record(10));
+
+    expect(упрямый.lastWriteError).toBeTruthy();
+    // Читать это не мешает: книга откроется, просто с начала.
+    expect(await упрямый.loadPosition("ключ")).toBe(0);
+    // И мусора после себя не оставляет.
+    expect(readdirSync(dir)).toEqual(["файл"]);
+  });
+
+  it("удачная запись снимает прошлую жалобу", async () => {
+    // Иначе жалоба, однажды записанная, висела бы до конца работы: читалка
+    // ругалась бы на каждую следующую книгу, хотя всё давно записывается.
+    const занято = join(dir, "под");
+    writeFileSync(занято, "не каталог");
+    const упрямый = new JsonFileStore(join(занято, "positions.json"));
+    await упрямый.savePosition("ключ", record(10));
+    expect(упрямый.lastWriteError).toBeTruthy();
+
+    // Помеха ушла — и следующая запись проходит.
+    rmSync(занято);
+    await упрямый.savePosition("ключ", record(20));
+    expect(упрямый.lastWriteError).toBeNull();
+    expect(await упрямый.loadPosition("ключ")).toBe(20);
   });
 });

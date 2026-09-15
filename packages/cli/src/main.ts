@@ -419,6 +419,9 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<numb
     at: Date.now() / 1000,
     hash: book.hash,
   });
+  // Не записалось — значит, книга завтра откроется с начала. Сказать об этом
+  // надо сразу: иначе читатель узнает об этом, потеряв место.
+  if (store.lastWriteError) fail(`место не сохранилось: ${store.lastWriteError}`);
   // Способ показа картинок не запоминаем: он зависит от того, в каком
   // терминале книгу открыли сейчас.
   await store.saveSettings({

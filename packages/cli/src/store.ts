@@ -6,7 +6,7 @@
  * позиции чтения переживают переход с одной реализации на другую.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { existsSync } from "node:fs";
 import { dirname } from "node:path";
 import {
@@ -32,7 +32,25 @@ const SETTINGS_KEY = "__settings__";
 
 type StateFile = Record<string, unknown>;
 
+/**
+ * Счётчик временных файлов.
+ *
+ * Имя временного файла складывается из номера процесса и этого счётчика:
+ * одно и то же имя на две записи — верный способ переименовать чужое и упасть
+ * на своём. Номера процесса мало: читалка пишет позиции не однажды.
+ */
+let temporaries = 0;
+
 export class JsonFileStore implements StateStore {
+  /**
+   * Почему не записалось в прошлый раз, или null.
+   *
+   * Молча терять позицию нельзя: читатель узнает об этом, только открыв книгу
+   * заново и увидев начало. Ронять читалку из-за этого тоже нельзя — поэтому
+   * причина запоминается, а показывает её тот, кому есть где сказать.
+   */
+  lastWriteError: string | null = null;
+
   constructor(private readonly path: string = stateFile()) {}
 
   private read(): StateFile {
@@ -48,13 +66,35 @@ export class JsonFileStore implements StateStore {
     }
   }
 
+  /**
+   * Записывает файл целиком — через временное имя и переименование.
+   *
+   * Прямая запись поверх прежнего файла оставляет при обрыве половину, а в
+   * этом файле лежат позиции и закладки всех книг разом: разбор половины не
+   * удаётся, и читалка честно начинает с чистого листа — то есть теряет всё
+   * накопленное. Переименование же атомарно: либо прежний файл, либо новый.
+   *
+   * Временное имя своё у каждой записи: одно на всех значило бы, что две
+   * читалки, запущенные разом, переименуют чужое и упадут на своём.
+   */
   private write(data: StateFile): void {
+    temporaries += 1;
+    const temp = `${this.path}.${process.pid}.${temporaries}.tmp`;
     try {
       mkdirSync(dirname(this.path), { recursive: true });
-      writeFileSync(this.path, JSON.stringify(data, null, 1), "utf-8");
-    } catch {
-      // Диск переполнен или каталог только для чтения: читать книгу это
-      // не мешает.
+      writeFileSync(temp, JSON.stringify(data, null, 1), "utf-8");
+      renameSync(temp, this.path);
+      this.lastWriteError = null;
+    } catch (e) {
+      // Диск переполнен или каталог только для чтения: читать книгу это не
+      // мешает, но и делать вид, что позиция сохранена, нельзя.
+      this.lastWriteError = (e as Error).message;
+      try {
+        rmSync(temp, { force: true });
+      } catch {
+        // Убрать за собой не вышло — тем более не повод падать: `force` молчит
+        // только о том, что файла нет, а здесь неладно с самим каталогом.
+      }
     }
   }
 

@@ -237,6 +237,13 @@ export async function runLibrary(
         hyphens: prefs.hyphens,
       });
 
+      // Если место не записалось, читатель должен узнать об этом здесь же:
+      // в списке, а не завтра, открыв книгу с начала. Проверка по свойству, а
+      // не по типу: хранилище описано в ядре, а неудача записи — забота той
+      // реализации, что пишет в файл.
+      const failure = (store as { lastWriteError?: string | null }).lastWriteError;
+      if (failure) uploadNote = `место не сохранилось: ${failure}`;
+
       // Список общий на весь цикл, поэтому обновлённый процент виден сразу
       // же, как только читатель вернулся из книги.
       chooser.updateProgress(path, progressPercent(result.block, book.blocks.length));
