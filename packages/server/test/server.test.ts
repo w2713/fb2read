@@ -93,6 +93,27 @@ describe("доступ", () => {
     // переставал бы работать.
     expect(() => parseTokens("я:a, /я:b")).toThrow(/называются/);
   });
+
+  it("не даёт двум пользователям один токен", () => {
+    // Токен ищется перебором и находит первого, поэтому у второго всё
+    // ложилось бы в чужой каталог: проверено — каталога «сосед» не
+    // появлялось вовсе, а книга соседа оказывалась в полке «я».
+    // Пробел после двоеточия ничего не меняет: токен сначала обрезается.
+    expect(() => parseTokens("я:obshchij, сосед: obshchij")).toThrow(/один токен/);
+  });
+
+  it("жалоба на общий токен называет людей, но не сам токен", () => {
+    // Она уходит в журнал сервера, а там секрету не место.
+    let complaint = "";
+    try {
+      parseTokens("я:sekretnyj-token, сосед:sekretnyj-token");
+    } catch (e) {
+      complaint = (e as Error).message;
+    }
+    expect(complaint).toContain("«я»");
+    expect(complaint).toContain("«сосед»");
+    expect(complaint).not.toContain("sekretnyj-token");
+  });
 });
 
 describe("проба живости", () => {
