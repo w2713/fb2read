@@ -520,6 +520,11 @@ export async function cmdSync(prefs: SyncPrefs, store: JsonFileStore): Promise<n
 
   try {
     let changed = 0;
+    // Слитое копится и ложится в файл одной записью. Книга за книгой стоило
+    // дорого: файл состояния один на все книги, и каждая правка — разбор и
+    // запись его целиком. На 300 книгах это три четверти секунды на файле в
+    // 103 КБ, ровно ни за что.
+    const заслано: { key: string; state: SyncState; path: string }[] = [];
     for (const state of local) {
       // Ключ и путь на сервер не едут: там они бесполезны, а путь на диске
       // этого устройства — не то, что стоит рассылать.
@@ -529,9 +534,10 @@ export async function cmdSync(prefs: SyncPrefs, store: JsonFileStore): Promise<n
       // Записываем всегда. Сравнивать по числу закладок нельзя: снятая и
       // поставленная дают одно и то же число, и слитое состояние тогда не
       // сохранялось бы — снятая закладка воскресала бы при каждом обмене.
-      await store.applyState(key, merged, path);
+      заслано.push({ key, state: merged, path });
       if (differs(wire, merged)) changed += 1;
     }
+    await store.applyStates(заслано);
     out(
       local.length
         ? `обменялись состоянием ${local.length} книг, обновилось ${changed}`
@@ -660,12 +666,15 @@ export async function syncAllQuiet(
   }
   const client = clientFor(settings, 30_000);
   let changed = 0;
+  const заслано: { key: string; state: SyncState; path: string }[] = [];
   for (const state of local) {
     const { key, path, ...wire } = state;
     const { state: merged } = await client.pushState(wire);
-    await store.applyState(key, merged, path);
+    заслано.push({ key, state: merged, path });
     if (differs(wire, merged)) changed += 1;
   }
+  // Одной записью, как и в команде sync: обмен идёт по всей полке.
+  await store.applyStates(заслано);
   return changed
     ? `синхронизировано ${local.length}, обновилось ${changed}`
     : `синхронизировано ${local.length}, всё и так совпадало`;
