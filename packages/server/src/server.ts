@@ -8,6 +8,7 @@
  * сертификаты лучше. Пример в README.
  */
 
+import { createHash, timingSafeEqual } from "node:crypto";
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { SKEW_LIMIT, nameWithExt, sha256Hex, type Bookmark, type SyncState } from "@fb2read/core";
 import { Storage, isHash, safeExt, type BookEntry } from "./storage.js";
@@ -51,17 +52,21 @@ function sizeWords(bytes: number): string {
 }
 
 /**
- * Сравнение токенов за одинаковое время.
+ * Отпечаток токена: по нему токены и сравниваются.
  *
  * Обычное `===` выходит из сравнения на первом несовпавшем символе, и по
- * времени ответа токен можно подобрать посимвольно. Здесь сравниваются все
- * символы всегда.
+ * времени ответа токен можно подобрать посимвольно. Посимвольное сравнение
+ * это закрывает, но не всё: ранний выход по длине выдавал длину настоящего
+ * токена, а зная длину, подбирать вдвое проще.
+ *
+ * Отпечатки же всегда по 32 байта, и сравнение их ничего не говорит ни о
+ * длине, ни о содержимом. Стоит это микросекунды на коротких строках.
+ *
+ * Дырой прежнее сравнение назвать нельзя: разницу в наносекундах по сети не
+ * разглядеть. Но и оставлять её незачем — цена починки никакая.
  */
-function sameToken(a: string, b: string): boolean {
-  if (a.length !== b.length) return false;
-  let diff = 0;
-  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
-  return diff === 0;
+function digest(token: string): Buffer {
+  return createHash("sha256").update(token, "utf8").digest();
 }
 
 /**
@@ -204,13 +209,17 @@ export function createHandler(options: ServerOptions) {
       }
     : {};
 
+  // Отпечатки известных токенов считаются один раз при запуске: на каждый
+  // запрос их пересчитывать незачем.
+  const known = [...options.tokens].map(([user, token]) => [user, digest(token)] as const);
+
   /** Кому принадлежит токен из заголовка, или null. */
   function whose(request: IncomingMessage): string | null {
     const header = request.headers["authorization"];
     if (typeof header !== "string" || !header.startsWith("Bearer ")) return null;
-    const token = header.slice(7).trim();
-    for (const [user, known] of options.tokens) {
-      if (sameToken(token, known)) return user;
+    const sent = digest(header.slice(7).trim());
+    for (const [user, mark] of known) {
+      if (timingSafeEqual(sent, mark)) return user;
     }
     return null;
   }
@@ -254,7 +263,12 @@ export function createHandler(options: ServerOptions) {
         json(response, 413, { error: e.message }, cors);
         return;
       }
-      json(response, 500, { error: (e as Error).message }, cors);
+      // Наружу — без подробностей. В сообщении ошибки бывают пути на диске
+      // сервера и имена пользователей, а спрашивает его кто угодно, у кого
+      // есть хоть какой-то токен. Подробность нужна хозяину сервера, и её
+      // место в журнале, а не в ответе.
+      process.stderr.write(`fb2read-server: ${(e as Error).stack ?? (e as Error).message}\n`);
+      json(response, 500, { error: "сервер не справился с запросом" }, cors);
     }
   };
 
@@ -413,14 +427,7 @@ export function createHandler(options: ServerOptions) {
 
     const now = Date.now() / 1000;
     const sent = typeof incoming.at === "number" && Number.isFinite(incoming.at) ? incoming.at : now;
-    incoming = {
-      ...incoming,
-      hash,
-      bookmarks: Array.isArray(incoming.bookmarks) ? incoming.bookmarks.map((m) => past(m, now)) : [],
-      at: Math.min(sent, now),
-    };
-
-    const merged = await storage.mergeIn(user, incoming, now);
+    const merged = await storage.mergeIn(user, tidy(incoming, hash, sent, now), now);
 
     // Слияние держится на времени, а время присылает устройство. Если его
     // часы ушли вперёд, оно выигрывает у всех и навсегда: ни одна честная
@@ -441,20 +448,85 @@ export function createHandler(options: ServerOptions) {
   }
 }
 
+/** Предел на строки состояния: подписи закладок читалки и так режут до 80. */
+const TEXT_LIMIT = 300;
+
+/** Целое не меньше нуля, или null, если присланное числом не считается. */
+function counted(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.min(Math.max(0, Math.floor(value)), Number.MAX_SAFE_INTEGER);
+}
+
+/** Строка в разумных пределах; всё прочее — пустая строка. */
+function text(value: unknown): string {
+  return typeof value === "string" ? value.slice(0, TEXT_LIMIT) : "";
+}
+
 /**
- * Закладка со временем не позже серверного.
+ * Закладка, приведённая к тому, чем она обязана быть, или null.
  *
- * Надгробие с временем из будущего бессмертно: снятую закладку не вернуть
- * никаким повторным нажатием, потому что любая живая запись оказывается
- * «раньше». Обрезка возвращает спор к обычному правилу — кто позже, тот и
- * прав, — а при равенстве побеждает пришедший сейчас.
+ * Время из будущего обрезается до серверного: надгробие с таким временем
+ * бессмертно — снятую закладку не вернуть никаким повторным нажатием, потому
+ * что любая живая запись оказывается «раньше». Обрезка возвращает спор к
+ * обычному правилу: кто позже, тот и прав, а при равенстве побеждает
+ * пришедший сейчас.
  *
- * Закладки без времени остаются без времени: придумать им час значило бы
- * поставить их выше тех, о которых точно известно, когда их сделали.
+ * Закладка без времени остаётся без времени: придумать ей час значило бы
+ * поставить её выше тех, о которых точно известно, когда их сделали.
+ *
+ * Незнакомые поля отбрасываются намеренно. Сервер не склад, а участник
+ * слияния: он сравнивает закладки и решает, какая победила, — значит, должен
+ * понимать всё, что хранит и рассылает по устройствам.
  */
-function past(mark: Bookmark, now: number): Bookmark {
-  if (typeof mark?.at !== "number" || !Number.isFinite(mark.at) || mark.at <= now) return mark;
-  return { ...mark, at: now };
+function mark(value: unknown, now: number): Bookmark | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const block = counted(raw["block"]);
+  // Закладка без номера абзаца не закладка: показать её негде и слить не с
+  // чем — слияние идёт как раз по номеру.
+  if (block === null) return null;
+  const out: Bookmark = { block };
+  const name = text(raw["name"]);
+  if (name) out.name = name;
+  const quote = text(raw["text"]);
+  if (quote) out.text = quote;
+  const percent = raw["percent"];
+  if (typeof percent === "number" && Number.isFinite(percent)) {
+    out.percent = Math.min(100, Math.max(0, Math.round(percent)));
+  }
+  const at = raw["at"];
+  if (typeof at === "number" && Number.isFinite(at)) out.at = Math.min(at, now);
+  if (raw["deleted"] === true) out.deleted = true;
+  return out;
+}
+
+/**
+ * Присланное состояние, приведённое к тому, чем оно обязано быть.
+ *
+ * Сервер хранит это и рассылает по всем устройствам, поэтому верить
+ * присланному нельзя. Раньше проверялось только одно — что позиция число, — и
+ * в хранилище попадало что угодно: позиция −5, дробная позиция, название на
+ * три мегабайта, закладки из пустых объектов. Читалки такое либо показывают
+ * как есть, либо спотыкаются на нём, а разбираться приходится глядя в JSON.
+ *
+ * Числа не отвергаются, а приводятся к ближайшему разумному: отказ значил бы,
+ * что одно сбитое устройство перестаёт синхронизироваться вовсе, — а позиция,
+ * съехавшая в начало книги, поправится первым же чтением. Отказ остаётся
+ * только на том, без чего состояния нет: на позиции, которая не число.
+ */
+function tidy(incoming: SyncState, hash: string, sent: number, now: number): SyncState {
+  return {
+    hash,
+    block: counted(incoming.block) ?? 0,
+    total: counted(incoming.total) ?? 0,
+    title: text(incoming.title),
+    author: text(incoming.author),
+    at: Math.min(sent, now),
+    ...(typeof incoming.device === "string" ? { device: text(incoming.device) } : {}),
+    bookmarks: Array.isArray(incoming.bookmarks)
+      ? incoming.bookmarks.map((m) => mark(m, now)).filter((m): m is Bookmark => m !== null)
+      : [],
+  };
 }
 
 function readString(value: string | string[] | undefined): string {
