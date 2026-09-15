@@ -288,6 +288,43 @@ describe("книги", () => {
     await expect(c.remove(пусто)).rejects.toThrow(/нет/);
   });
 
+  it("книга, которой нет на диске, уходит из списка сама", async () => {
+    // Запись без файла — обещание, которого не сдержать: книга видна в списке
+    // у всех устройств, а на каждую попытку скачать отвечается «такой книги
+    // нет». Так бывает после неудачного переноса данных или уборки руками.
+    const hash = await sha256Hex(data);
+    const c = client();
+    await c.upload(hash, "потеряшка.fb2", data);
+    await c.pushState(state({ hash, block: 30 }));
+    rmSync(join(dir, "я", "books", `${hash}.fb2`));
+
+    await expect(c.download(hash)).rejects.toThrow(/нет/);
+    expect(await c.list()).toEqual([]);
+
+    // Надгробия нет намеренно: книга не удалена, а потеряна — и устройство,
+    // где она сохранилась, вернёт её первой же выгрузкой.
+    expect([...(await c.shelf()).buried]).toEqual([]);
+    await c.upload(hash, "потеряшка.fb2", data);
+    expect(await c.list()).toHaveLength(1);
+    // А место дождалось возвращения книги.
+    expect((await c.states(0))[0]!.block).toBe(30);
+  });
+
+  it("помеха на диске записи о книге не стирает", async () => {
+    // Права, сбойный диск, непримонтированный том — это не потеря, и стирать
+    // по ним запись читателя нельзя. Здесь вместо файла книги — каталог: он
+    // читается с ошибкой, но «файла нет» эта ошибка не значит.
+    const hash = await sha256Hex(data);
+    const c = client();
+    await c.upload(hash, "помеха.fb2", data);
+    const файл = join(dir, "я", "books", `${hash}.fb2`);
+    rmSync(файл);
+    mkdirSync(файл);
+
+    await expect(c.download(hash)).rejects.toThrow();
+    expect(await c.list()).toHaveLength(1);
+  });
+
   it("не показывает чужие книги", async () => {
     const hash = await sha256Hex(data);
     await client(TOKEN).upload(hash, "моя.fb2", data);
