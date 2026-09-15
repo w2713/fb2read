@@ -17,6 +17,7 @@ import {
   SyncClient,
   SyncError,
   bookKey,
+  bookTimeout,
   isBookName,
   mergeState,
   nameWithExt,
@@ -170,6 +171,7 @@ function booksIn(dir: string): string[] {
  * библиотеку» не то же самое, что «верни всё удалённое».
  */
 async function pushOne(
+  settings: SyncSettings,
   client: SyncClient,
   store: JsonFileStore,
   path: string,
@@ -184,7 +186,11 @@ async function pushOne(
     // Нечитаемая книга всё равно выгружается: разбирать её будет то
     // устройство, которое скачает.
   }
-  await client.upload(hash, basename(path), data, meta, { revive });
+  // Срок — по размеру книги: один на все размеры значил бы, что толстая книга
+  // не уезжает никогда, а тонкую читатель ждёт впустую, если связи нет.
+  await clientFor(settings, bookTimeout(data.length)).upload(hash, basename(path), data, meta, {
+    revive,
+  });
 
   // Заодно уезжает позиция: книга без места, на котором её бросили,
   // на другом устройстве откроется с начала.
@@ -233,7 +239,9 @@ export async function cmdPush(
     return 1;
   }
 
-  const client = clientFor(settings, 300_000);
+  // Список и места — разговор, он короткий; книги уезжают своим сроком, по
+  // размеру каждой.
+  const client = clientFor(settings, 30_000);
   let there: Set<string>;
   let buried: Set<string>;
   try {
@@ -266,7 +274,7 @@ export async function cmdPush(
         continue;
       }
       out(`выгружаю ${basename(path)} (${Math.round(data.length / 1024)} КБ)`);
-      await pushOne(client, store, path, data, hash, revive);
+      await pushOne(settings, client, store, path, data, hash, revive);
       there.add(hash);
       sent += 1;
     } catch (e) {
@@ -301,7 +309,7 @@ export async function keepOnServer(
   meta: { hash: string; title: string; author: string },
 ): Promise<string> {
   try {
-    const client = clientFor(settings, 300_000);
+    const client = clientFor(settings, 30_000);
     // Сперва спрашиваем, есть ли книга: заново лить сорок мегабайт при каждом
     // открытии — не то, чего ждут от чтения книги.
     const { books, buried } = await client.shelf();
@@ -312,7 +320,7 @@ export async function keepOnServer(
     // `fb2read push книга.fb2`.
     if (buried.has(meta.hash)) return "";
     const data = new Uint8Array(readFileSync(path));
-    await client.upload(meta.hash, basename(path), data, {
+    await clientFor(settings, bookTimeout(data.length)).upload(meta.hash, basename(path), data, {
       title: meta.title,
       author: meta.author,
     });
@@ -334,7 +342,9 @@ export async function cmdPull(
 ): Promise<number> {
   const settings = prepare(prefs);
   if (!settings) return 2;
-  const client = clientFor(settings, 120_000);
+  // Список и места — разговор коротким сроком; каждая книга скачивается своим,
+  // по её размеру.
+  const client = clientFor(settings, 30_000);
 
   let books: RemoteBook[];
   try {
@@ -394,7 +404,7 @@ export async function cmdPull(
   let failed = 0;
   for (const book of wanted) {
     try {
-      const data = await client.download(book.hash);
+      const data = await clientFor(settings, bookTimeout(book.size)).download(book.hash);
       const path = join(dir, nameWithExt(safeFileName(book.name), data));
       writeFileSync(path, data);
       out(`${book.name} → ${path}`);
@@ -589,8 +599,12 @@ export async function downloadBook(
   hash: string,
   name: string,
 ): Promise<string> {
-  const client = clientFor(settings, 120_000);
-  const data = await client.download(hash);
+  // Размер спрашивается у сервера: от него зависит срок ожидания, а здесь, в
+  // списке книг, размера под рукой нет. Запрос короткий и дешёвый, а скачивание
+  // читатель запросил сам — лишняя пара сотен миллисекунд тут не в счёт.
+  const client = clientFor(settings, 30_000);
+  const there = (await client.list()).find((book) => book.hash === hash);
+  const data = await clientFor(settings, bookTimeout(there?.size ?? 0)).download(hash);
   const dir = libraryDir();
   mkdirSync(dir, { recursive: true });
   const path = join(dir, nameWithExt(safeFileName(name), data));
