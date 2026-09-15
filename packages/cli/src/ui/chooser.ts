@@ -7,7 +7,7 @@
  * возвращается сюда же с обновлённым прогрессом.
  */
 
-import { cutToWidth, plural, strWidth } from "@fb2read/core";
+import { cutToWidth, plural, strWidth, worthFinding } from "@fb2read/core";
 import type { MouseEvent } from "../term/input.js";
 import type { Screen } from "../term/screen.js";
 import { Prompt } from "./prompt.js";
@@ -40,6 +40,14 @@ export class Chooser implements View {
   pickedEntry: ChooserEntry | null = null;
   /** Строка вместо подсказки: например, «скачиваю…» во время загрузки. */
   notice = "";
+  /**
+   * Что искать по всем книгам сразу; null — не искали.
+   *
+   * Сам поиск идёт не здесь: список не умеет открывать книги, а перебор — это
+   * как раз открытие каждой. Экран только принимает запрос и заканчивает,
+   * отдавая его библиотеке.
+   */
+  query: string | null = null;
 
   private cursor = 0;
   private top = 0;
@@ -157,6 +165,7 @@ export class Chooser implements View {
     // Про щелчок говорится, только когда строка не занята другими клавишами:
     // подсказка должна помещаться и в узком окне.
     const keys = [this.hooks.onSync || this.hooks.onAdd ? " Enter — читать" : " Enter или клик — читать"];
+    if (this.entries.length > 1) keys.push("/ — искать во всех");
     if (this.hooks.onAdd) keys.push("a — добавить книгу");
     if (this.hooks.onSync) keys.push("S — синхронизировать");
     keys.push("q — выход ");
@@ -221,6 +230,22 @@ export class Chooser implements View {
     }
     if (name === "S") {
       void this.runSync();
+      return;
+    }
+    if (name === "/" && this.entries.length > 1) {
+      // По единственной книге ищут, открыв её: там поиск и покажет, сколько
+      // совпадений и где они.
+      this.prompt = new Prompt("искать во всех книгах: ", (text) => {
+        if (text === null) return;
+        if (!worthFinding(text)) {
+          this.notice = " для поиска нужно хотя бы две буквы ";
+          this.needsFullRedraw = true;
+          this.hooks.requestPaint?.();
+          return;
+        }
+        this.query = text;
+        this.finished = true;
+      });
       return;
     }
     if (name === "a" && this.hooks.onAdd) {

@@ -309,3 +309,56 @@ describe("добавление книги из списка", () => {
     expect(await ui.picked()).toBeNull();
   });
 });
+
+describe("поиск по всем книгам из списка", () => {
+  it("«/» спрашивает, что искать, и отдаёт запрос библиотеке", async () => {
+    // Сам перебор списку не по силам: он не открывает книги. Его дело —
+    // принять запрос и закончиться, отдав его наружу.
+    const ui = await libraryHarness(BOOKS);
+    expect(ui.terminal.line(23)).toContain("/ — искать во всех");
+    await ui.press("/");
+    expect(ui.terminal.line(23)).toContain("искать во всех книгах:");
+
+    for (const ch of "мельница") await ui.press(ch);
+    expect(ui.terminal.line(23)).toContain("мельница");
+    await ui.press("\r");
+    expect(await ui.picked()).toBeNull();
+    expect(ui.chooser.query).toBe("мельница");
+  });
+
+  it("по одной букве перебор не запускается", async () => {
+    // Совпадёт всё подряд, а стоить это будет разбора всех книг подряд.
+    const ui = await libraryHarness(BOOKS);
+    await ui.press("/");
+    await ui.press("а");
+    await ui.press("\r");
+    await ui.settle();
+    expect(ui.chooser.query).toBeNull();
+    expect(ui.terminal.line(23)).toContain("хотя бы две буквы");
+    await ui.press("q");
+    expect(await ui.picked()).toBeNull();
+  });
+
+  it("передумали — список остаётся как был", async () => {
+    const ui = await libraryHarness(BOOKS);
+    await ui.press("/");
+    for (const ch of "мель") await ui.press(ch);
+    await ui.press("\x1b");
+    await ui.settle();
+    expect(ui.chooser.query).toBeNull();
+    expect(ui.terminal.line(23)).toContain("Enter");
+    await ui.press("q");
+    expect(await ui.picked()).toBeNull();
+  });
+
+  it("по единственной книге искать негде: клавиши нет вовсе", async () => {
+    // По одной книге ищут, открыв её: там поиск покажет и счёт совпадений, и
+    // переходы между ними.
+    const ui = await libraryHarness(BOOKS.slice(0, 1));
+    expect(ui.terminal.line(23)).not.toContain("искать во всех");
+    await ui.press("/");
+    expect(ui.terminal.line(23)).not.toContain("искать во всех книгах:");
+    await ui.press("q");
+    expect(await ui.picked()).toBeNull();
+  });
+});

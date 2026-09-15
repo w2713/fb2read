@@ -52,3 +52,5 @@ export type {
   SyncResponse,
 } from "./sync.js";
 export type { QuickMeta } from "./meta.js";
+export { MIN_QUERY, PER_BOOK, worthFinding, findOrder, capHits, progressLine } from "./libfind.js";
+export type { Capped } from "./libfind.js";
