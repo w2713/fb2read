@@ -17,6 +17,7 @@
 import {
   SyncClient,
   SyncError,
+  bookTimeout,
   mergeState,
   type Settings,
   type SyncState,
@@ -78,28 +79,91 @@ export function changed(sent: SyncState, got: SyncState): boolean {
   return got.bookmarks.some((m) => !before.has(mark(m)));
 }
 
+/** Что случилось за обмен — из этого складывается строка для читателя. */
+export interface Tally {
+  /** Книги, уехавшие на сервер. */
+  sent?: number;
+  /** Книги, приехавшие с сервера. */
+  taken?: number;
+  /** Книги, у которых обновилось место или закладки. */
+  updated?: number;
+  /** Удалённые с сервера, которые не стали возвращать. */
+  refused?: number;
+  /** Книги, ждущие на сервере: за один обмен полку целиком не тянут. */
+  waiting?: number;
+  /** Жалоба сервера — например, о разошедшихся часах. */
+  warning?: string;
+}
+
 /**
  * Итог обмена словами.
  *
  * Жалоба сервера — про часы — идёт следом за итогом, а не вместо него: обмен
  * всё-таки состоялся, и читателю важно и то, и другое.
+ *
+ * Счётчиков стало пять, и передаются они по имени: пять чисел подряд в вызове
+ * читались бы загадкой, а перепутать их местами — дело одной правки.
  */
-export function tell(
-  sent: number,
-  taken: number,
-  updated: number,
-  warning = "",
-  refused = 0,
-): string {
+export function tell(tally: Tally): string {
   const parts: string[] = [];
-  if (sent) parts.push(`отправлено книг: ${sent}`);
-  if (taken) parts.push(`получено книг: ${taken}`);
-  if (updated) parts.push(`обновилось мест: ${updated}`);
+  if (tally.sent) parts.push(`отправлено книг: ${tally.sent}`);
+  if (tally.taken) parts.push(`получено книг: ${tally.taken}`);
+  if (tally.updated) parts.push(`обновилось мест: ${tally.updated}`);
   // Про пропущенные говорим прямо: книга лежит на полке, а на сервер не
   // уезжает — молчание об этом читатель принял бы за поломку обмена.
-  if (refused) parts.push(`удалённых с сервера не возвращали: ${refused}`);
+  if (tally.refused) parts.push(`удалённых с сервера не возвращали: ${tally.refused}`);
+  // Ждущие — тоже вслух: иначе непонятно, почему книга видна облаком, а обмен
+  // прошёл «успешно».
+  if (tally.waiting) parts.push(`ждут на сервере: ${tally.waiting} — коснитесь, чтобы забрать`);
   const итог = parts.length ? parts.join(", ") : "всё и так совпадало";
-  return warning ? `${итог}; ${warning}` : итог;
+  return tally.warning ? `${итог}; ${tally.warning}` : итог;
+}
+
+/**
+ * Сколько ждать разговора с сервером: списка, места, удаления.
+ *
+ * Это короткие запросы, и ждать их минутами незачем: читатель нажал кнопку и
+ * смотрит на строку.
+ */
+export const TALK_TIMEOUT = 30_000;
+
+/**
+ * Сколько мегабайт забирать с сервера за один обмен.
+ *
+ * Обмен затевается и сам — при закрытии книги, — и читатель на телефоне не
+ * ждёт, что нажатие «Синхронизировать» притянет всю полку по мобильной связи.
+ * Двадцать мегабайт — это несколько книг: то, за чем обмен и нужен.
+ */
+export const FETCH_BUDGET = 20 * 1024 * 1024;
+
+/**
+ * Что забрать сейчас, а что оставить ждать облаком.
+ *
+ * Книги приходят от сервера новыми сверху, поэтому берутся самые свежие —
+ * именно их обычно и ждут на другом устройстве. Остальные никуда не деваются:
+ * они видны облаком и забираются касанием, у которого свой срок и свой отчёт.
+ *
+ * Не влезшая книга не останавливает очередь, а пропускается: иначе одна
+ * толстая книга в начале списка держала бы всю полку вечно — каждый обмен
+ * упирался бы в неё, и мелкие книги не приезжали бы никогда.
+ *
+ * Первая книга берётся всегда, даже если она одна толще предела. Иначе такая
+ * книга не приехала бы никогда: в браузере за незнакомой книгой сходить нечем,
+ * касание есть только у снятых с полки. А так она приедет следующим обменом,
+ * когда окажется первой в очереди, — и обмен, в котором она приехала, других
+ * книг уже не потянет.
+ */
+export function budget<T extends { size: number }>(
+  wanted: readonly T[],
+): { take: T[]; waiting: number } {
+  const take: T[] = [];
+  let bytes = 0;
+  for (const book of wanted) {
+    if (take.length > 0 && bytes + book.size > FETCH_BUDGET) continue;
+    take.push(book);
+    bytes += book.size;
+  }
+  return { take, waiting: wanted.length - take.length };
 }
 
 export function client(settings: SyncSettings, timeoutMs: number): SyncClient {
@@ -143,15 +207,16 @@ export async function fetchBook(
   hash: string,
 ): Promise<string> {
   try {
-    const api = client(settings, 120_000);
-    const there = (await api.list()).find((book) => book.hash === hash);
+    const there = (await client(settings, TALK_TIMEOUT).list()).find((book) => book.hash === hash);
     if (!there) {
       // Книгу могли удалить с сервера с другого устройства. Держать облако,
       // за которым ничего нет, — обманывать читателя.
       await store.undrop(hash);
       return "книги на сервере больше нет";
     }
-    const bytes = await api.download(hash);
+    // Срок — по размеру книги: касанием забирают и толстые, а ждать их
+    // столько же, сколько списка, значит не забрать никогда.
+    const bytes = await client(settings, bookTimeout(there.size)).download(hash);
     await store.putBook(
       {
         hash,
@@ -182,7 +247,7 @@ export async function forgetBook(
   hash: string,
 ): Promise<string> {
   try {
-    await client(settings, 60_000).remove(hash);
+    await client(settings, TALK_TIMEOUT).remove(hash);
     await store.undrop(hash);
     return "удалена с сервера";
   } catch (e) {
@@ -198,7 +263,9 @@ export async function forgetBook(
  */
 export async function exchange(store: IdbStore, settings: SyncSettings): Promise<SyncReport> {
   try {
-    const api = client(settings, 120_000);
+    // Разговор коротким сроком, книги — своим на каждую: один срок на всё
+    // означал либо вечность в ответ на список, либо заведомо мало на книгу.
+    const api = client(settings, TALK_TIMEOUT);
     const { books: remote, buried } = await api.shelf();
     const { books, states } = await store.shelf();
 
@@ -218,7 +285,8 @@ export async function exchange(store: IdbStore, settings: SyncSettings): Promise
       }
       const data = await store.bookFile(book.hash);
       if (!data) continue;
-      await api.upload(book.hash, book.name, new Uint8Array(await data.arrayBuffer()), {
+      const bytes = new Uint8Array(await data.arrayBuffer());
+      await client(settings, bookTimeout(bytes.length)).upload(book.hash, book.name, bytes, {
         title: book.title,
         author: book.author,
       });
@@ -229,10 +297,17 @@ export async function exchange(store: IdbStore, settings: SyncSettings): Promise
     // вовсе: обмен видит, что книги нет, и добросовестно возвращает её.
     const dropped = await store.dropped();
 
+    // За один обмен берём горстку книг, а не полку целиком: обмен затевается и
+    // сам, при закрытии книги, и читатель на телефоне не ждёт, что от этого по
+    // мобильной связи приедут все книги сразу. Остальные видны облаком и
+    // забираются касанием.
+    const { take, waiting } = budget(
+      remote.filter((book) => !here.has(book.hash) && !dropped.has(book.hash)),
+    );
+
     let taken = 0;
-    for (const book of remote) {
-      if (here.has(book.hash) || dropped.has(book.hash)) continue;
-      const bytes = await api.download(book.hash);
+    for (const book of take) {
+      const bytes = await client(settings, bookTimeout(book.size)).download(book.hash);
       await store.putBook(
         {
           hash: book.hash,
@@ -275,7 +350,11 @@ export async function exchange(store: IdbStore, settings: SyncSettings): Promise
       if (changed(mine, merged)) updated += 1;
     }
 
-    return { ok: true, text: tell(sent, taken, updated, warned, refused), arrived: taken };
+    return {
+      ok: true,
+      text: tell({ sent, taken, updated, refused, waiting, warning: warned }),
+      arrived: taken,
+    };
   } catch (e) {
     // Читатель нажал кнопку и ждёт ответа: молчать нельзя, но и мешать
     // чтению эта неудача не должна.

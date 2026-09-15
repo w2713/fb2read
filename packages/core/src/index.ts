@@ -41,6 +41,7 @@ export {
   SyncClient,
   SyncError,
   SKEW_LIMIT,
+  bookTimeout,
 } from "./sync.js";
 export type {
   SyncState,

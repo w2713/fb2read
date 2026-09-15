@@ -9,6 +9,7 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createServer as createFileServer, type Server } from "node:http";
 import { createServer as createSocket, type AddressInfo } from "node:net";
@@ -513,5 +514,59 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     ) as { version: string };
     expect(строка).toBe(`сервер fb2read-server ${manifest.version}`);
     await page.close();
+  }, SLOW);
+
+  it("за один обмен полку целиком не тянет", async () => {
+    // Обмен затевается и сам, при закрытии книги, и читатель на телефоне не
+    // ждёт, что от этого по мобильной связи приедет вся полка сразу. Книги
+    // берутся, пока укладываются в двадцать мегабайт; остальные ждут и
+    // приедут следующим обменом.
+    //
+    // Книги кладутся на сервер прямо отсюда: гнать двадцать мегабайт через
+    // браузер ради этого незачем, а на устройство толстая и не должна попасть.
+    const книга = async (название: string, набивка: number) => {
+      const текст = BOOK.replace("Книга с ноутбука", название).replace(
+        "<body><section>",
+        `<body><section><!--${"х".repeat(набивка)}-->`,
+      );
+      const байты = Buffer.from(текст, "utf-8");
+      const отпечаток = createHash("sha256").update(байты).digest("hex");
+      const ответ = await fetch(`${api}/api/v1/books/${отпечаток}`, {
+        method: "PUT",
+        headers: {
+          Authorization: `Bearer ${TOKEN}`,
+          "Content-Type": "application/octet-stream",
+          "X-Name": encodeURIComponent(`${название}.fb2`),
+          "X-Title": encodeURIComponent(название),
+        },
+        body: байты,
+      });
+      expect(ответ.status).toBe(200);
+      return отпечаток;
+    };
+
+    // Толстая кладётся раньше: сервер отдаёт список новыми сверху, и в
+    // очереди она окажется после тонкой — то есть уже за пределом.
+    const толстая = await книга("Книга толстая", 21 * 1024 * 1024);
+    await книга("Книга тонкая", 0);
+
+    const page = await browser.newPage();
+    await page.goto(base);
+    await setUp(page);
+    const итог = await обменяться(page);
+    expect(итог).toContain("ждут на сервере: 1");
+
+    // Тонкая приехала, толстая — нет: её двадцать один мегабайт остался на
+    // сервере и приедет следующим обменом, когда окажется первым в очереди.
+    const книги = (await полка(page)).join(" ");
+    expect(книги).toContain("Книга тонкая");
+    expect(книги).not.toContain("Книга толстая");
+
+    await page.close();
+    // Убираем за собой: следующим проверкам эта тяжесть ни к чему.
+    await fetch(`${api}/api/v1/books/${толстая}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${TOKEN}` },
+    });
   }, SLOW);
 });
