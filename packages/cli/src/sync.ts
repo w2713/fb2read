@@ -162,13 +162,20 @@ function booksIn(dir: string): string[] {
     });
 }
 
-/** Выгружает одну книгу вместе с её позицией. */
+/**
+ * Выгружает одну книгу вместе с её позицией.
+ *
+ * `revive` значит «читатель назвал именно этот файл»: тогда сервер вернёт и
+ * книгу, удалённую с него раньше. Выгрузка каталогом так не делает — «выгрузи
+ * библиотеку» не то же самое, что «верни всё удалённое».
+ */
 async function pushOne(
   client: SyncClient,
   store: JsonFileStore,
   path: string,
   data: Uint8Array,
   hash: string,
+  revive = false,
 ): Promise<void> {
   let meta = { title: "", author: "" };
   try {
@@ -177,7 +184,7 @@ async function pushOne(
     // Нечитаемая книга всё равно выгружается: разбирать её будет то
     // устройство, которое скачает.
   }
-  await client.upload(hash, basename(path), data, meta);
+  await client.upload(hash, basename(path), data, meta, { revive });
 
   // Заодно уезжает позиция: книга без места, на котором её бросили,
   // на другом устройстве откроется с начала.
@@ -213,8 +220,10 @@ export async function cmdPush(
   // --all без пути — это каталог библиотеки: туда же ложится скачанное.
   const where = target ? resolve(target) : libraryDir();
   let files: string[];
+  let directory: boolean;
   try {
-    files = statSync(where).isDirectory() ? booksIn(where) : [where];
+    directory = statSync(where).isDirectory();
+    files = directory ? booksIn(where) : [where];
   } catch (e) {
     err(`${target ?? where}: ${(e as Error).message}`);
     return 1;
@@ -226,15 +235,24 @@ export async function cmdPush(
 
   const client = clientFor(settings, 300_000);
   let there: Set<string>;
+  let buried: Set<string>;
   try {
-    there = new Set((await client.list()).map((book) => book.hash));
+    const shelf = await client.shelf();
+    there = new Set(shelf.books.map((book) => book.hash));
+    buried = shelf.buried;
   } catch (e) {
     return complain(e);
   }
 
+  // Названную книгу сервер вернёт, даже если её раньше удалили: человек
+  // указал файл сам. Каталог и --all удалённого не возвращают — иначе одна
+  // выгрузка библиотеки отменяла бы все прошлые forget разом.
+  const revive = !all && !directory;
+
   let sent = 0;
   let already = 0;
   let failed = 0;
+  let refused = 0;
   for (const path of files) {
     try {
       const data = new Uint8Array(readFileSync(path));
@@ -243,8 +261,12 @@ export async function cmdPush(
         already += 1;
         continue;
       }
+      if (!revive && buried.has(hash)) {
+        refused += 1;
+        continue;
+      }
       out(`выгружаю ${basename(path)} (${Math.round(data.length / 1024)} КБ)`);
-      await pushOne(client, store, path, data, hash);
+      await pushOne(client, store, path, data, hash, revive);
       there.add(hash);
       sent += 1;
     } catch (e) {
@@ -256,6 +278,7 @@ export async function cmdPush(
   // Итог словами: «готово» после десятка строк не говорит, что вышло.
   const parts = [`выгружено: ${sent}`];
   if (already) parts.push(`уже было: ${already}`);
+  if (refused) parts.push(`удалённых с сервера не возвращали: ${refused}`);
   if (failed) parts.push(`не вышло: ${failed}`);
   out(parts.join(", "));
   return failed ? 1 : 0;
@@ -281,8 +304,13 @@ export async function keepOnServer(
     const client = clientFor(settings, 300_000);
     // Сперва спрашиваем, есть ли книга: заново лить сорок мегабайт при каждом
     // открытии — не то, чего ждут от чтения книги.
-    const there = await client.list();
-    if (there.some((book) => book.hash === meta.hash)) return "";
+    const { books, buried } = await client.shelf();
+    if (books.some((book) => book.hash === meta.hash)) return "";
+    // Удалённую с сервера не возвращаем: открыть книгу на этом устройстве —
+    // не просьба вернуть её всем остальным. Молча: читатель убрал её сам, и
+    // напоминать об этом при каждом открытии незачем. Вернёт её явное
+    // `fb2read push книга.fb2`.
+    if (buried.has(meta.hash)) return "";
     const data = new Uint8Array(readFileSync(path));
     await client.upload(meta.hash, basename(path), data, {
       title: meta.title,

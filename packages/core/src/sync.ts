@@ -268,8 +268,28 @@ export class SyncClient {
 
   /** Книги, лежащие на сервере. */
   async list(): Promise<RemoteBook[]> {
-    const data = await this.json<{ books?: RemoteBook[] }>("/books", { headers: this.headers() });
-    return data.books ?? [];
+    return (await this.shelf()).books;
+  }
+
+  /**
+   * Книги на сервере вместе с отпечатками удалённых с него.
+   *
+   * Удалённые нужны тому, кто выгружает сам: устройство, где книга осталась,
+   * иначе возвращало бы её при каждом обмене — и `forget` не значил бы
+   * ничего. Список приезжает тем же ответом, что и книги: лишний запрос
+   * ради него был бы обиднее, чем несколько лишних отпечатков в ответе.
+   *
+   * Сервер старее этого списка не присылает — тогда пусто, и всё работает
+   * как прежде.
+   */
+  async shelf(): Promise<{ books: RemoteBook[]; buried: Set<string> }> {
+    const data = await this.json<{ books?: RemoteBook[]; buried?: string[] }>("/books", {
+      headers: this.headers(),
+    });
+    return {
+      books: data.books ?? [],
+      buried: new Set(Array.isArray(data.buried) ? data.buried : []),
+    };
   }
 
   /**
@@ -283,6 +303,7 @@ export class SyncClient {
     name: string,
     data: Uint8Array,
     meta: { title?: string; author?: string } = {},
+    options: { revive?: boolean } = {},
   ): Promise<void> {
     // Имена и названия бывают русскими, а в заголовке допустима только
     // латиница, поэтому они едут процентным кодированием.
@@ -292,6 +313,10 @@ export class SyncClient {
     };
     if (meta.title) headers["X-Title"] = encodeURIComponent(meta.title);
     if (meta.author) headers["X-Author"] = encodeURIComponent(meta.author);
+    // Удалённую с сервера книгу возвращает только явная выгрузка: человек
+    // назвал файл сам, значит он её и хочет. Само по себе ничто её не
+    // вернёт — на этом и держится смысл forget.
+    if (options.revive) headers["X-Revive"] = "1";
     await this.request(`/books/${hash}`, {
       method: "PUT",
       headers: this.headers(headers),
@@ -353,5 +378,6 @@ async function describe(response: SyncResponse): Promise<string> {
   }
   if (response.status === 404) return detail || "на сервере такого нет";
   if (response.status === 413) return detail || "книга больше, чем сервер согласен принять";
+  if (response.status === 410) return detail || "книга удалена с сервера";
   return detail ? `сервер ответил ${response.status}: ${detail}` : `сервер ответил ${response.status}`;
 }

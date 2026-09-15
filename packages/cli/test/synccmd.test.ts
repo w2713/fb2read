@@ -13,7 +13,7 @@ import { homedir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { Bookmark, SyncState } from "@fb2read/core";
+import { sha256Hex, type Bookmark, type SyncState } from "@fb2read/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { JsonFileStore } from "../src/store.js";
 import { syncOnDemand, type SyncSettings } from "../src/sync.js";
@@ -240,7 +240,7 @@ describe("выгрузка открытой книги", () => {
   );
 
   /** Сервер, который помнит, что ему положили. */
-  function raise(было: string[]): Promise<{
+  function raise(было: string[], похоронено: string[] = []): Promise<{
     url: string;
     uploaded: { hash: string; name: string; size: number }[];
     close: () => Promise<void>;
@@ -253,6 +253,7 @@ describe("выгрузка открытой книги", () => {
         response.end(
           JSON.stringify({
             books: было.map((hash) => ({ hash, name: "есть.fb2", size: 1, title: "", author: "", updatedAt: 1 })),
+            buried: похоронено,
           }),
         );
         return;
@@ -285,11 +286,11 @@ describe("выгрузка открытой книги", () => {
     });
   }
 
-  async function keep(было: string[], hash = HASH) {
+  async function keep(было: string[], hash = HASH, похоронено: string[] = []) {
     const { keepOnServer } = await import("../src/sync.js");
     const file = join(dir, "Анна Каренина.fb2");
     writeFileSync(file, книга);
-    const сервер = await raise(было);
+    const сервер = await raise(было, похоронено);
     try {
       const note = await keepOnServer(
         { ...settings, url: сервер.url, upload: true },
@@ -317,6 +318,15 @@ describe("выгрузка открытой книги", () => {
     expect(note).toBe("");
   });
 
+  it("удалённую с сервера при открытии не возвращает", async () => {
+    // Иначе forget не значит ничего: книга осталась на устройстве, читатель
+    // её открыл — и она уехала обратно, никого не спросив. Молча: убрал он
+    // её сам, а вернёт явное `fb2read push книга.fb2`.
+    const { note, uploaded } = await keep([], HASH, [HASH]);
+    expect(uploaded).toEqual([]);
+    expect(note).toBe("");
+  });
+
   it("недоступный сервер объясняет словами и не бросает", async () => {
     const { keepOnServer } = await import("../src/sync.js");
     const file = join(dir, "к.fb2");
@@ -339,9 +349,16 @@ describe("выгрузка каталогом", () => {
     );
 
   /** Сервер, помнящий выгруженное; список отдаёт то, что уже лежит. */
-  function raise(): Promise<{ url: string; names: string[]; close: () => Promise<void> }> {
+  function raise(похоронено: string[] = []): Promise<{
+    url: string;
+    names: string[];
+    revived: string[];
+    close: () => Promise<void>;
+  }> {
     const names: string[] = [];
+    const revived: string[] = [];
     const hashes = new Set<string>();
+    const buried = new Set(похоронено);
     const s = createServer((request, response) => {
       const path = (request.url ?? "").split("?")[0]!;
       if (request.method === "GET" && path === "/api/v1/books") {
@@ -351,6 +368,7 @@ describe("выгрузка каталогом", () => {
             books: [...hashes].map((hash) => ({
               hash, name: "х.fb2", size: 1, title: "", author: "", updatedAt: 1,
             })),
+            buried: [...buried],
           }),
         );
         return;
@@ -359,7 +377,18 @@ describe("выгрузка каталогом", () => {
         const chunks: Buffer[] = [];
         request.on("data", (c: Buffer) => chunks.push(c));
         request.on("end", () => {
-          hashes.add(path.slice("/api/v1/books/".length));
+          const hash = path.slice("/api/v1/books/".length);
+          const revive = request.headers["x-revive"] === "1";
+          if (buried.has(hash) && !revive) {
+            response.writeHead(410, { "Content-Type": "application/json" });
+            response.end(JSON.stringify({ error: "эта книга удалена с сервера" }));
+            return;
+          }
+          if (revive) {
+            revived.push(hash);
+            buried.delete(hash);
+          }
+          hashes.add(hash);
           names.push(decodeURIComponent(String(request.headers["x-name"] ?? "")));
           response.writeHead(200, { "Content-Type": "application/json" });
           response.end(JSON.stringify({ ok: true }));
@@ -379,20 +408,21 @@ describe("выгрузка каталогом", () => {
         done({
           url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`,
           names,
+          revived,
           close: () => new Promise<void>((r) => s.close(() => r())),
         }),
       );
     });
   }
 
-  async function push(target: string | undefined, all: boolean, lib: string) {
+  async function push(target: string | undefined, all: boolean, lib: string, похоронено: string[] = []) {
     const { cmdPush } = await import("../src/sync.js");
     const было = process.env["FB2READ_LIBRARY"];
     process.env["FB2READ_LIBRARY"] = lib;
-    const сервер = await raise();
+    const сервер = await raise(похоронено);
     try {
       const code = await cmdPush({ url: сервер.url, token: "proba-token" }, target, all, store());
-      return { code, names: сервер.names };
+      return { code, names: сервер.names, revived: сервер.revived };
     } finally {
       await сервер.close();
       if (было === undefined) delete process.env["FB2READ_LIBRARY"];
@@ -434,6 +464,28 @@ describe("выгрузка каталогом", () => {
     const { code, names } = await push(lib, false, lib);
     expect(code).toBe(0);
     expect(names).toHaveLength(2);
+    rmSync(lib, { recursive: true, force: true });
+  });
+
+  it("каталогом удалённое с сервера не возвращается", async () => {
+    // «Выгрузи библиотеку» — не «верни всё, что я когда-то удалил»: иначе
+    // одна такая выгрузка отменяла бы все прошлые forget разом.
+    const lib = library();
+    const первая = await sha256Hex(книга("Первая"));
+    const { code, names } = await push(lib, false, lib, [первая]);
+    expect(code).toBe(0);
+    expect(names).toEqual(["Вторая.fb2"]);
+    rmSync(lib, { recursive: true, force: true });
+  });
+
+  it("названную книгу сервер возвращает по просьбе", async () => {
+    // Удаляют и по ошибке, а иначе вернуть книгу нечем вовсе.
+    const lib = library();
+    const первая = await sha256Hex(книга("Первая"));
+    const { code, names, revived } = await push(join(lib, "Первая.fb2"), false, lib, [первая]);
+    expect(code).toBe(0);
+    expect(names).toEqual(["Первая.fb2"]);
+    expect(revived).toEqual([первая]);
     rmSync(lib, { recursive: true, force: true });
   });
 

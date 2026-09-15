@@ -399,6 +399,46 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     await второе.close();
   }, SLOW);
 
+  it("удалённая книга не уезжает обратно с того устройства, где осталась", async () => {
+    // Здесь forget и ломался: книга осталась на первом устройстве, второе
+    // удалило её с сервера — и первое возвращало её при первом же обмене.
+    // Само, при закрытии книги, никого не спросив.
+    const первое = await browser.newPage();
+    await первое.goto(base);
+    await setUp(первое);
+    await give(первое, "Лишняя.fb2", BOOK.replace("Книга с ноутбука", "Книга лишняя"));
+    await первое.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await первое.click("#close");
+    await первое.waitForSelector("#shelf li", { timeout: 10_000 });
+    expect(await обменяться(первое)).not.toContain("не вышло");
+
+    // Второе устройство книгу получило, сняло с полки и удалило с сервера.
+    const второе = await browser.newPage();
+    await второе.goto(base);
+    await setUp(второе);
+    expect(await обменяться(второе)).toContain("получено книг");
+    await второе.click("li:not(.shelf-remote):has-text('Книга лишняя') .shelf-drop");
+    await второе.waitForSelector(".shelf-remote:has-text('Книга лишняя')", { timeout: 10_000 });
+    второе.once("dialog", (d) => void d.accept());
+    await второе.click(".shelf-remote:has-text('Книга лишняя') .shelf-drop");
+    await второе.waitForFunction(
+      () => !document.querySelector("#shelf")!.textContent!.includes("Книга лишняя"),
+      undefined,
+      { timeout: 10_000 },
+    );
+
+    // Первое книгу не возвращает и говорит об этом прямо.
+    expect(await обменяться(первое)).toContain("удалённых с сервера не возвращали: 1");
+
+    // На сервере её и правда нет: второму нечего получать, и облака на его
+    // полке не появилось.
+    expect(await обменяться(второе)).not.toContain("получено книг");
+    expect((await полка(второе)).join(" ")).not.toContain("Книга лишняя");
+
+    await первое.close();
+    await второе.close();
+  }, SLOW);
+
   it("о разошедшихся часах читателю говорят", async () => {
     // Место сливается по времени, и устройство с неверной датой иначе узнает
     // об этом только по странным прыжкам позиции. Сервер такое время обрезает

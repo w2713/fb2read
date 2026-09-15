@@ -84,11 +84,20 @@ export function changed(sent: SyncState, got: SyncState): boolean {
  * Жалоба сервера — про часы — идёт следом за итогом, а не вместо него: обмен
  * всё-таки состоялся, и читателю важно и то, и другое.
  */
-export function tell(sent: number, taken: number, updated: number, warning = ""): string {
+export function tell(
+  sent: number,
+  taken: number,
+  updated: number,
+  warning = "",
+  refused = 0,
+): string {
   const parts: string[] = [];
   if (sent) parts.push(`отправлено книг: ${sent}`);
   if (taken) parts.push(`получено книг: ${taken}`);
   if (updated) parts.push(`обновилось мест: ${updated}`);
+  // Про пропущенные говорим прямо: книга лежит на полке, а на сервер не
+  // уезжает — молчание об этом читатель принял бы за поломку обмена.
+  if (refused) parts.push(`удалённых с сервера не возвращали: ${refused}`);
   const итог = parts.length ? parts.join(", ") : "всё и так совпадало";
   return warning ? `${итог}; ${warning}` : итог;
 }
@@ -190,15 +199,23 @@ export async function forgetBook(
 export async function exchange(store: IdbStore, settings: SyncSettings): Promise<SyncReport> {
   try {
     const api = client(settings, 120_000);
-    const remote = await api.list();
+    const { books: remote, buried } = await api.shelf();
     const { books, states } = await store.shelf();
 
     const there = new Set(remote.map((book) => book.hash));
     const here = new Set(books.map((book) => book.hash));
 
     let sent = 0;
+    // Удалённое с сервера обратно не отправляем. Иначе «удалить с сервера»
+    // не работает вовсе: обмен видит, что книги там нет, и добросовестно
+    // возвращает её — сам, при закрытии книги, без всякой просьбы.
+    let refused = 0;
     for (const book of books) {
       if (there.has(book.hash)) continue;
+      if (buried.has(book.hash)) {
+        refused += 1;
+        continue;
+      }
       const data = await store.bookFile(book.hash);
       if (!data) continue;
       await api.upload(book.hash, book.name, new Uint8Array(await data.arrayBuffer()), {
@@ -258,7 +275,7 @@ export async function exchange(store: IdbStore, settings: SyncSettings): Promise
       if (changed(mine, merged)) updated += 1;
     }
 
-    return { ok: true, text: tell(sent, taken, updated, warned), arrived: taken };
+    return { ok: true, text: tell(sent, taken, updated, warned, refused), arrived: taken };
   } catch (e) {
     // Читатель нажал кнопку и ждёт ответа: молчать нельзя, но и мешать
     // чтению эта неудача не должна.
