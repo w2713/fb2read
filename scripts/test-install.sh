@@ -16,7 +16,16 @@ PORT=${FB2READ_TEST_PORT:-8749}
 SERVER=""
 
 cleanup() {
-    [ -n "$SERVER" ] && kill "$SERVER" 2>/dev/null
+    if [ -n "$SERVER" ]; then
+        # «|| true» обязательны у обоих: сервер убит сигналом, и wait
+        # возвращает 143, а kill не найдёт уже вышедший процесс. С set -e любой
+        # из этих кодов становится кодом всей проверки — она печатала бы
+        # «установщик проверен» и выходила с 143.
+        kill "$SERVER" 2>/dev/null || true
+        # Дожидаемся: иначе сервер ещё держит порт, когда проверку запускают
+        # второй раз подряд.
+        wait "$SERVER" 2>/dev/null || true
+    fi
     rm -rf "$WORK"
 }
 trap cleanup EXIT INT TERM
@@ -54,8 +63,12 @@ fi
 echo "собираю $target"
 "$ROOT/scripts/build-binaries.sh" "$WORK/release" "$target" >/dev/null
 
+# exec обязателен: без него в $! попадает подоболочка, а не python. Она от
+# kill умирает, python остаётся жить и держать порт — и следующий прогон
+# получает от него 404 из уже удалённого каталога. Проверка при этом падает
+# так, будто сломан установщик.
 echo "поднимаю сервер на порту $PORT"
-(cd "$WORK/release" && python3 -m http.server "$PORT" >/dev/null 2>&1) &
+(cd "$WORK/release" && exec python3 -m http.server "$PORT" >/dev/null 2>&1) &
 SERVER=$!
 sleep 1
 
