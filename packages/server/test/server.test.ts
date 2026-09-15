@@ -284,14 +284,30 @@ describe("книги", () => {
     expect(await client("sosedskiy-token").list()).toEqual([]);
   });
 
-  it("отказывает книге сверх предела", async () => {
+  it("отказывает книге сверх предела и называет предел понятно", async () => {
+    // «Книга больше 0 МБ» — вот что говорилось раньше при небольшом пределе:
+    // мегабайты округлялись до нуля, и отказ не значил ничего.
     await new Promise<void>((resolve) => server.close(() => resolve()));
     server = createServer({ dir, tokens: parseTokens(`я:${TOKEN}`), maxBytes: 32 });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 
     const big = new Uint8Array(1024);
-    await expect(client().upload(await sha256Hex(big), "толстая.fb2", big)).rejects.toThrow(/МБ|больше/);
+    await expect(client().upload(await sha256Hex(big), "толстая.fb2", big)).rejects.toThrow(
+      /книга больше 32 Б/,
+    );
+  });
+
+  it("предел в килобайтах называется килобайтами", async () => {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createServer({ dir, tokens: parseTokens(`я:${TOKEN}`), maxBytes: 2048 });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const big = new Uint8Array(4096);
+    await expect(client().upload(await sha256Hex(big), "толстая.fb2", big)).rejects.toThrow(
+      /книга больше 2 КБ/,
+    );
   });
 });
 
@@ -367,6 +383,22 @@ describe("состояние", () => {
     ]);
     const [merged] = await c.states(0);
     expect(merged!.bookmarks.map((m) => m.block).sort()).toEqual([1, 2, 3]);
+  });
+
+  it("отказ состоянию называет свой предел, а не книжный", async () => {
+    // Состояние читается со своим пределом в четыре мегабайта, а в ответ
+    // приходило «книга больше 200 МБ»: и про книгу, которой в запросе не
+    // было, и про предел, которого никто не переступал. Читатель после
+    // такого ищет толстую книгу, а дело в записи о закладках.
+    const hash = await sha256Hex(new TextEncoder().encode("огромное состояние"));
+    // Кириллица в JSON занимает по два байта на букву — пяти миллионов
+    // хватает с запасом, а строить десятки тысяч закладок незачем.
+    const раздутое = state({ hash, title: "я".repeat(2_600_000) });
+    await expect(client().pushState(раздутое)).rejects.toThrow(
+      /запись о месте и закладках больше 4 МБ/,
+    );
+    // И ничего не записалось: отказ — это отказ.
+    expect(await client().states(0)).toEqual([]);
   });
 
   it("не берёт тело, которое не разобралось", async () => {
