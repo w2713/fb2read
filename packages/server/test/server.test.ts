@@ -6,14 +6,14 @@
  * позиции на двух устройствах, а такое ловится только сквозным прогоном.
  */
 
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AddressInfo } from "node:net";
 import type { Server } from "node:http";
 import { SyncClient, sha256Hex, type SyncState } from "@fb2read/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createServer, parseTokens } from "../src/server.js";
 import { Storage } from "../src/storage.js";
 import { VERSION } from "../src/version.js";
@@ -60,6 +60,16 @@ describe("доступ", () => {
 
   it("не пускает с чужим токеном", async () => {
     await expect(client("podobrannyj").list()).rejects.toThrow(/токен/);
+  });
+
+  it("не пускает ни с началом верного токена, ни с ним же и лишним хвостом", async () => {
+    // Токены сравниваются по отпечаткам: у них всегда 32 байта, и время
+    // ответа не говорит ни о длине настоящего токена, ни о том, сколько
+    // символов сошлось.
+    await expect(client(TOKEN.slice(0, 10)).list()).rejects.toThrow(/токен/);
+    await expect(client(`${TOKEN}hvost`).list()).rejects.toThrow(/токен/);
+    // А верный по-прежнему пускают.
+    expect(await client(TOKEN).list()).toEqual([]);
   });
 
   it("не поднимается вовсе без токенов: иначе пускал бы кого угодно", () => {
@@ -408,6 +418,98 @@ describe("состояние", () => {
       body: "это не json",
     });
     expect(response.status).toBe(400);
+  });
+});
+
+describe("присланному состоянию не верят на слово", () => {
+  // Сервер хранит это и рассылает по всем устройствам. Раньше проверялось
+  // только одно — что позиция число, — и в хранилище попадало что угодно.
+  const data = new TextEncoder().encode("книга для мусора");
+
+  it("отрицательная позиция становится началом книги", async () => {
+    // Отказывать нельзя: сбитое устройство перестало бы синхронизироваться
+    // вовсе. А позиция, съехавшая в начало, поправится первым же чтением.
+    const hash = await sha256Hex(data);
+    const { state: merged } = await client().pushState(state({ hash, block: -5 }));
+    expect(merged.block).toBe(0);
+  });
+
+  it("дробная позиция округляется вниз", async () => {
+    const hash = await sha256Hex(data);
+    const { state: merged } = await client().pushState(state({ hash, block: 3.7 }));
+    expect(merged.block).toBe(3);
+  });
+
+  it("отрицательная длина книги обнуляется", async () => {
+    const hash = await sha256Hex(data);
+    const { state: merged } = await client().pushState(state({ hash, block: 1, total: -100 }));
+    expect(merged.total).toBe(0);
+  });
+
+  it("непомерное название обрезается", async () => {
+    // Иначе название на три мегабайта уедет на каждое устройство и станет
+    // строкой в списке книг.
+    const hash = await sha256Hex(data);
+    const { state: merged } = await client().pushState(
+      state({ hash, block: 1, title: "я".repeat(5000) }),
+    );
+    expect(merged.title).toHaveLength(300);
+  });
+
+  it("мусор вместо закладок отбрасывается, годные остаются", async () => {
+    const hash = await sha256Hex(data);
+    const { state: merged } = await client().pushState(
+      state({
+        hash,
+        block: 1,
+        // Настоящий клиент такого не пришлёт, но сервер отвечает всем.
+        bookmarks: [null, {}, "строка", { block: 2.9 }, { block: 7, name: "годная" }] as never,
+      }),
+    );
+    expect(merged.bookmarks.map((m) => m.block)).toEqual([2, 7]);
+    expect(merged.bookmarks[1]!.name).toBe("годная");
+  });
+
+  it("незнакомые поля закладки не хранятся", async () => {
+    // Сервер не склад: он сравнивает закладки и решает, какая победила, —
+    // значит, должен понимать всё, что хранит и рассылает.
+    const hash = await sha256Hex(data);
+    const { state: merged } = await client().pushState(
+      state({ hash, block: 1, bookmarks: [{ block: 3, чужое: "не наше" }] as never }),
+    );
+    expect(merged.bookmarks).toEqual([{ block: 3 }]);
+  });
+
+  it("пятисотка не выносит наружу путей с диска сервера", async () => {
+    // Спрашивает сервер кто угодно, у кого есть хоть какой-то токен, а в
+    // сообщении ошибки лежат пути и имена пользователей. Хозяину сервера они
+    // нужны — и их место в журнале, а не в ответе.
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    const файл = join(dir, "вместо-каталога");
+    writeFileSync(файл, "я файл, а не каталог");
+    server = createServer({ dir: файл, tokens: parseTokens(`я:${TOKEN}`) });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    const журнал: string[] = [];
+    const перехват = vi.spyOn(process.stderr, "write").mockImplementation((line) => {
+      журнал.push(String(line));
+      return true;
+    });
+    let жалоба = "";
+    try {
+      await client().pushState(state({ hash: await sha256Hex(data), block: 1 }));
+    } catch (e) {
+      жалоба = (e as Error).message;
+    } finally {
+      перехват.mockRestore();
+    }
+
+    expect(жалоба).toContain("500");
+    expect(жалоба).not.toContain(файл);
+    expect(жалоба).not.toMatch(/ENOTDIR|ENOENT/);
+    // А хозяину сервера подробность досталась.
+    expect(журнал.join("")).toMatch(/ENOTDIR|ENOENT/);
   });
 });
 
