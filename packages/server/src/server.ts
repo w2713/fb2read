@@ -68,6 +68,7 @@ export function safeName(name: string): string {
  */
 export function parseTokens(raw: string | undefined): Map<string, string> {
   const out = new Map<string, string>();
+  const owner = new Map<string, string>();
   for (const piece of (raw ?? "").split(",")) {
     const item = piece.trim();
     if (!item) continue;
@@ -81,6 +82,16 @@ export function parseTokens(raw: string | undefined): Map<string, string> {
     if (out.has(safe)) {
       throw new Error(`двое пользователей называются «${safe}»: у каждого должно быть своё имя`);
     }
+    // Один токен на двоих — то же самое, только незаметнее: токен ищется
+    // перебором и находит первого, поэтому всё, что присылает второй,
+    // ложится в чужой каталог. Каталога с его именем не появляется вовсе,
+    // и оба молча читают одну полку. Сам токен в сообщение не попадает: оно
+    // уходит в журнал, а там ему не место.
+    const twin = owner.get(token);
+    if (twin !== undefined) {
+      throw new Error(`у «${twin}» и «${safe}» один токен: каждому нужен свой, иначе они поделят полку`);
+    }
+    owner.set(token, safe);
     out.set(safe, token);
   }
   return out;
