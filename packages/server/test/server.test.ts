@@ -6,7 +6,7 @@
  * позиции на двух устройствах, а такое ловится только сквозным прогоном.
  */
 
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +15,7 @@ import type { Server } from "node:http";
 import { SyncClient, sha256Hex, type SyncState } from "@fb2read/core";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createServer, parseTokens } from "../src/server.js";
+import { Storage } from "../src/storage.js";
 import { VERSION } from "../src/version.js";
 
 const TOKEN = "b8f1c0d2e3a45f6789ab";
@@ -312,5 +313,85 @@ describe("сквозной обмен двух устройств", () => {
       state({ hash, block: 300, at: 2001, bookmarks: [{ block: 40, at: 1000, name: "мысль" }] }),
     );
     expect(после.bookmarks.filter((m) => !m.deleted)).toEqual([]);
+  });
+});
+
+describe("несколько книг разом", () => {
+  /** Книга с заданным содержимым: у каждой свой отпечаток. */
+  async function книга(n: number): Promise<{ data: Uint8Array; hash: string }> {
+    const data = new TextEncoder().encode(`книга номер ${n} `.repeat(n * 5));
+    return { data, hash: await sha256Hex(data) };
+  }
+
+  it("две выгрузки одновременно — обе книги в списке", async () => {
+    // Указатель книг один на пользователя, а очередь была заведена на книгу:
+    // две выгрузки разом читали указатель одинаковым и писали по очереди,
+    // теряя одну запись. Вдобавок обе брали одно и то же временное имя —
+    // вторая падала на переименовании, и сервер отвечал 500.
+    const api = client();
+    const первая = await книга(1);
+    const вторая = await книга(2);
+    await Promise.all([
+      api.upload(первая.hash, "первая.fb2", первая.data, { title: "Первая" }),
+      api.upload(вторая.hash, "вторая.fb2", вторая.data, { title: "Вторая" }),
+    ]);
+
+    const список = (await api.list()).map((book) => book.title).sort();
+    expect(список).toEqual(["Вторая", "Первая"]);
+    // И обе по-настоящему скачиваются: запись в указателе без байтов ничего
+    // не стоит.
+    expect((await api.download(первая.hash)).length).toBe(первая.data.length);
+    expect((await api.download(вторая.hash)).length).toBe(вторая.data.length);
+  });
+
+  it("пять выгрузок разом не теряют ни одной", async () => {
+    const api = client();
+    const книги = await Promise.all([1, 2, 3, 4, 5].map((n) => книга(n)));
+    await Promise.all(книги.map((к, i) => api.upload(к.hash, `книга-${i}.fb2`, к.data, {})));
+    expect((await api.list()).length).toBe(5);
+  });
+
+  it("удаление одной книги не теряет другую, выгружаемую в тот же миг", async () => {
+    const api = client();
+    const старая = await книга(3);
+    const новая = await книга(4);
+    await api.upload(старая.hash, "старая.fb2", старая.data, { title: "Старая" });
+
+    await Promise.all([
+      api.remove(старая.hash),
+      api.upload(новая.hash, "новая.fb2", новая.data, { title: "Новая" }),
+    ]);
+
+    expect((await api.list()).map((book) => book.title)).toEqual(["Новая"]);
+  });
+
+  it("неудачная запись не оставляет временного файла", async () => {
+    // Неудача бывает: кончилось место, права, чужой каталог на пути. Мусор
+    // после неё копился бы молча и занимал ровно столько же, сколько данные.
+    const storage = new Storage(join(dir, "своё"));
+    // На месте указателя — каталог: переименовать файл поверх него нельзя.
+    mkdirSync(join(dir, "своё", "я"), { recursive: true });
+    mkdirSync(join(dir, "своё", "я", "index.json"));
+
+    const data = new TextEncoder().encode("книга");
+    const hash = await sha256Hex(data);
+    await expect(
+      storage.putBook(
+        "я",
+        { hash, name: "к.fb2", size: data.length, title: "К", author: "", updatedAt: 1, ext: ".fb2" },
+        data,
+      ),
+    ).rejects.toThrow();
+
+    const мусор = readdirSync(join(dir, "своё", "я")).filter((name) => name.endsWith(".tmp"));
+    expect(мусор).toEqual([]);
+  });
+
+  it("после выгрузки не остаётся временных файлов", async () => {
+    const api = client();
+    const книги = await Promise.all([6, 7].map((n) => книга(n)));
+    await Promise.all(книги.map((к, i) => api.upload(к.hash, `к-${i}.fb2`, к.data, {})));
+    const мусор = readdirSync(join(dir, "я")).filter((name) => name.endsWith(".tmp"));
+    expect(мусор).toEqual([]);
   });
 });

@@ -63,18 +63,37 @@ async function readJson<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
+/** Счётчик временных файлов: имя должно быть своим у каждой записи. */
+let temporaries = 0;
+
 /**
  * Запись через временное имя.
  *
  * Обрыв на середине оставит целым прежний файл, а не половину нового:
  * потерять позицию чтения обидно, но испорченный index.json хуже — он
  * прячет сразу все книги.
+ *
+ * Временное имя своё у каждой записи. Общее имя на всех значило бы, что две
+ * записи разом переименуют одно и то же: первая уносит временный файл себе,
+ * вторая падает на `rename` с ENOENT. Так и случалось при выгрузке двух книг
+ * одновременно, пока указатель правился без общей очереди.
+ *
+ * Очередь это и закрывает, а имя остаётся второй линией: на будущие пути,
+ * которые кто-нибудь однажды запишет из двух мест разом. Двух серверов над
+ * одним каталогом оно, впрочем, не спасает — там разъедется и слияние
+ * состояния, у которого очередь тоже своя на процесс.
  */
 async function writeAtomic(path: string, data: string | Uint8Array): Promise<void> {
   await mkdir(dirname(path), { recursive: true });
-  const temp = `${path}.tmp`;
-  await writeFile(temp, data);
-  await rename(temp, path);
+  temporaries += 1;
+  const temp = `${path}.${process.pid}.${temporaries}.tmp`;
+  try {
+    await writeFile(temp, data);
+    await rename(temp, path);
+  } catch (e) {
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw e;
+  }
 }
 
 export class Storage {
@@ -128,13 +147,32 @@ export class Storage {
     return (await this.index(user))[hash] ?? null;
   }
 
+  /**
+   * Правит указатель книг под общей очередью.
+   *
+   * Очередь на книгу тут не спасает: указатель один на всех, и две книги,
+   * выгруженные разом, читали его одинаковым, а писали по очереди — вторая
+   * запись теряла первую книгу. Поэтому правка указателя выстраивается в свою
+   * цепочку, общую для пользователя.
+   */
+  private editIndex<T>(user: string, edit: (index: Record<string, BookEntry>) => T): Promise<T> {
+    return this.serial(`${user}/index`, async () => {
+      const index = await this.index(user);
+      const got = edit(index);
+      await writeAtomic(this.indexPath(user), JSON.stringify(index, null, 1));
+      return got;
+    });
+  }
+
   /** Кладёт книгу и запоминает её в указателе. */
   async putBook(user: string, entry: BookEntry, data: Uint8Array): Promise<void> {
     await this.serial(`${user}/${entry.hash}`, async () => {
+      // Сначала байты, потом запись о них: книга без записи просто не видна, а
+      // запись без книги обещает то, чего скачать нельзя.
       await writeAtomic(join(this.dir(user), "books", `${entry.hash}${entry.ext}`), data);
-      const index = await this.index(user);
-      index[entry.hash] = entry;
-      await writeAtomic(this.indexPath(user), JSON.stringify(index, null, 1));
+      await this.editIndex(user, (index) => {
+        index[entry.hash] = entry;
+      });
     });
   }
 
@@ -152,11 +190,12 @@ export class Storage {
   /** Удаляет книгу вместе с её состоянием. */
   async deleteBook(user: string, hash: string): Promise<boolean> {
     return this.serial(`${user}/${hash}`, async () => {
-      const index = await this.index(user);
-      const entry = index[hash];
+      const entry = await this.editIndex(user, (index) => {
+        const found = index[hash] ?? null;
+        delete index[hash];
+        return found;
+      });
       if (!entry) return false;
-      delete index[hash];
-      await writeAtomic(this.indexPath(user), JSON.stringify(index, null, 1));
       await rm(join(this.dir(user), "books", `${hash}${entry.ext}`), { force: true });
       await rm(join(this.dir(user), "state", `${hash}.json`), { force: true });
       return true;
