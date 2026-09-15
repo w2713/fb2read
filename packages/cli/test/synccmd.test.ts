@@ -230,6 +230,84 @@ describe("скачивание книги", () => {
   });
 });
 
+describe("обмен состоянием всей полки", () => {
+  /** Считает записи файла: у хранилища они частные, но проверке видны. */
+  function счётчик(куда: JsonFileStore): () => number {
+    let n = 0;
+    const скрытое = куда as unknown as { write: (data: unknown) => void };
+    const писало = скрытое.write.bind(куда);
+    скрытое.write = (data) => {
+      n += 1;
+      писало(data);
+    };
+    return () => n;
+  }
+
+  it("пишет файл состояния один раз, а не по разу на книгу", async () => {
+    // Файл один на все книги, и правка книга за книгой разбирала и писала его
+    // целиком. Замерено на 300 книгах (файл 103 КБ): 300 записей на 204 мс и
+    // 602 разбора на 580 мс — три четверти секунды ни за что.
+    const { cmdSync } = await import("../src/sync.js");
+    const свой = store();
+    for (let i = 0; i < 3; i += 1) {
+      await свой.applyState(
+        `kluch${i}`,
+        {
+          hash: String(i).repeat(64).slice(0, 64),
+          block: i,
+          total: 100,
+          title: `Книга ${i}`,
+          author: "Автор",
+          at: 1_700_000_000,
+          bookmarks: [],
+        },
+        join(dir, `книга-${i}.fb2`),
+      );
+    }
+
+    const записей = счётчик(свой);
+    expect(await cmdSync({ url: settings.url, token: "proba-token" }, свой)).toBe(0);
+    expect(записей()).toBe(1);
+    // И слитое доехало до файла: одна запись — не повод потерять места.
+    expect(await свой.loadPosition("kluch2")).toBe(2);
+  });
+
+  it("тихий обмен из списка книг пишет так же — один раз", async () => {
+    // Это тот же обмен, только по нажатию клавиши в списке: на экране список,
+    // и печатать поверх него нельзя, поэтому итог возвращается строкой.
+    const { syncAllQuiet } = await import("../src/sync.js");
+    const свой = store();
+    for (let i = 0; i < 3; i += 1) {
+      await свой.applyState(
+        `kluch${i}`,
+        {
+          hash: String(i).repeat(64).slice(0, 64),
+          block: i,
+          total: 100,
+          title: `Книга ${i}`,
+          author: "Автор",
+          at: 1_700_000_000,
+          bookmarks: [],
+        },
+        join(dir, `книга-${i}.fb2`),
+      );
+    }
+
+    const записей = счётчик(свой);
+    const итог = await syncAllQuiet(settings, свой);
+    expect(итог).toContain("синхронизировано 3");
+    expect(записей()).toBe(1);
+  });
+
+  it("пустой обмен файла не трогает", async () => {
+    const { cmdSync } = await import("../src/sync.js");
+    const свой = store();
+    const записей = счётчик(свой);
+    expect(await cmdSync({ url: settings.url, token: "proba-token" }, свой)).toBe(0);
+    expect(записей()).toBe(0);
+  });
+});
+
 describe("скачивание всей полки", () => {
   const книга = (название: string) =>
     new TextEncoder().encode(
