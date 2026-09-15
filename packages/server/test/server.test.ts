@@ -395,3 +395,75 @@ describe("несколько книг разом", () => {
     expect(мусор).toEqual([]);
   });
 });
+
+describe("ушедшие часы", () => {
+  const ВПЕРЁД = 10 * 365 * 24 * 3600;
+
+  it("время из будущего не морозит книгу навсегда", async () => {
+    // Иначе одно устройство с неверной датой выигрывает у всех и навсегда:
+    // ни одна честная запись больше не окажется «позже».
+    const hash = "e".repeat(64);
+    const сейчас = Date.now() / 1000;
+    await client(TOKEN, "телефон").pushState(
+      state({ hash, block: 10, at: сейчас + ВПЕРЁД }),
+    );
+
+    const { state: после } = await client(TOKEN, "ноутбук").pushState(
+      state({ hash, block: 900, at: Date.now() / 1000 }),
+    );
+    expect(после.block).toBe(900);
+  });
+
+  it("записанное время — серверное, а не присланное", async () => {
+    const hash = "f".repeat(64);
+    const сейчас = Date.now() / 1000;
+    const { state: записано } = await client(TOKEN, "телефон").pushState(
+      { hash, block: 10, total: 100, title: "Книга", author: "", at: сейчас + ВПЕРЁД, bookmarks: [] },
+    );
+    expect(записано.at).toBeLessThanOrEqual(Date.now() / 1000 + 1);
+  });
+
+  it("о расхождении часов по-прежнему предупреждают", async () => {
+    // Обрезка чинит слияние, но не часы: узнать о них читатель должен.
+    const hash = "0".repeat(64);
+    const { warning } = await client(TOKEN, "телефон").pushState(
+      state({ hash, block: 1, at: Date.now() / 1000 + ВПЕРЁД }),
+    );
+    expect(warning).toContain("часы устройства расходятся");
+    expect(warning).toContain("серверным");
+  });
+
+  it("надгробие из будущего не бессмертно", async () => {
+    const hash = "1".repeat(64);
+    const сейчас = Date.now() / 1000;
+    await client(TOKEN, "телефон").pushState(
+      state({ hash, block: 1, at: сейчас, bookmarks: [{ block: 5, at: сейчас + ВПЕРЁД, deleted: true }] }),
+    );
+
+    // Читатель ставит закладку заново — и она остаётся.
+    const { state: после } = await client(TOKEN, "ноутбук").pushState(
+      state({ hash, block: 1, at: Date.now() / 1000, bookmarks: [{ block: 5, at: Date.now() / 1000, name: "моя" }] }),
+    );
+    expect(после.bookmarks.filter((m) => !m.deleted).map((m) => m.name)).toEqual(["моя"]);
+  });
+
+  it("отставшие часы не подменяются: они вредят только своему хозяину", async () => {
+    // Подмена затёрла бы верную запись о том, когда книгу читали на самом деле.
+    const hash = "2".repeat(64);
+    const давно = 1_600_000_000;
+    const { state: записано } = await client(TOKEN, "старый").pushState(
+      state({ hash, block: 7, at: давно }),
+    );
+    expect(записано.at).toBe(давно);
+  });
+
+  it("закладка без времени остаётся без времени", async () => {
+    // Придуманный час поставил бы её выше тех, о которых точно известно,
+    // когда их сделали.
+    const hash = "3".repeat(64);
+    const { state: после } = await client(TOKEN, "ноутбук").pushState(
+      state({ hash, block: 1, at: Date.now() / 1000, bookmarks: [{ block: 9, name: "из старого файла" }] }),
+    );
+    expect(после.bookmarks[0]).toEqual({ block: 9, name: "из старого файла" });
+  });
+});

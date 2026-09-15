@@ -399,6 +399,46 @@ describe.skipIf(!CHROME)("обмен с сервером", () => {
     await второе.close();
   }, SLOW);
 
+  it("о разошедшихся часах читателю говорят", async () => {
+    // Место сливается по времени, и устройство с неверной датой иначе узнает
+    // об этом только по странным прыжкам позиции. Сервер такое время обрезает
+    // до своего — и предупреждает; предупреждение должно дойти до читателя.
+    const page = await browser.newPage();
+    await page.goto(base);
+    await setUp(page);
+    await give(page, "Книга.fb2", BOOK);
+    await page.waitForSelector("#book:not([hidden])", { timeout: 20_000 });
+    await page.click("#close");
+    await page.waitForSelector("#shelf li", { timeout: 10_000 });
+    // Сперва обычный обмен: закрытие книги могло завести свой, и он, дойдя
+    // позже, переписал бы подставленное время ответом сервера.
+    expect(await обменяться(page)).not.toContain("не вышло");
+
+    // Часы устройства уехали на десять лет вперёд — так это выглядит в записи
+    // о месте, которую читалка отправляет на сервер.
+    await page.evaluate(
+      () =>
+        new Promise<void>((resolve) => {
+          const request = indexedDB.open("fb2read");
+          request.onsuccess = () => {
+            const tx = request.result.transaction("state", "readwrite");
+            const store = tx.objectStore("state");
+            const all = store.getAll();
+            all.onsuccess = () => {
+              for (const record of all.result as Array<{ hash?: string; at: number }>) {
+                if (!record.hash) continue;
+                store.put({ ...record, at: Date.now() / 1000 + 10 * 365 * 24 * 3600 }, record.hash);
+              }
+            };
+            tx.oncomplete = () => resolve();
+          };
+        }),
+    );
+
+    expect(await обменяться(page)).toContain("часы устройства расходятся");
+    await page.close();
+  }, SLOW);
+
   it("неверный токен объясняется, а не молчит", async () => {
     const page = await browser.newPage();
     await page.goto(base);

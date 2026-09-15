@@ -78,14 +78,19 @@ export function changed(sent: SyncState, got: SyncState): boolean {
   return got.bookmarks.some((m) => !before.has(mark(m)));
 }
 
-/** Итог обмена словами. */
-export function tell(sent: number, taken: number, updated: number): string {
-  if (!sent && !taken && !updated) return "всё и так совпадало";
+/**
+ * Итог обмена словами.
+ *
+ * Жалоба сервера — про часы — идёт следом за итогом, а не вместо него: обмен
+ * всё-таки состоялся, и читателю важно и то, и другое.
+ */
+export function tell(sent: number, taken: number, updated: number, warning = ""): string {
   const parts: string[] = [];
   if (sent) parts.push(`отправлено книг: ${sent}`);
   if (taken) parts.push(`получено книг: ${taken}`);
   if (updated) parts.push(`обновилось мест: ${updated}`);
-  return parts.join(", ");
+  const итог = parts.length ? parts.join(", ") : "всё и так совпадало";
+  return warning ? `${итог}; ${warning}` : итог;
 }
 
 export function client(settings: SyncSettings, timeoutMs: number): SyncClient {
@@ -228,6 +233,11 @@ export async function exchange(store: IdbStore, settings: SyncSettings): Promise
     // Места отправляются по всем книгам, что лежат на полке, — включая
     // только что приехавшие: у них место уже может быть на сервере.
     let updated = 0;
+    // Сервер отвечает предупреждением, когда часы устройства разошлись с
+    // его собственными. Молчать об этом нельзя: место сливается по времени,
+    // и разъехавшиеся часы читатель иначе увидит только по странным прыжкам
+    // позиции. Хватит и первого: жалоба одна на все книги.
+    let warned = "";
     const known = new Map(states.map((state) => [state.hash ?? "", state]));
     for (const hash of new Set([...here, ...there])) {
       const state = known.get(hash);
@@ -242,12 +252,13 @@ export async function exchange(store: IdbStore, settings: SyncSettings): Promise
         device: settings.device,
         bookmarks: state?.bookmarks ?? [],
       };
-      const { state: merged } = await api.pushState(mine);
+      const { state: merged, warning } = await api.pushState(mine);
+      if (warning && !warned) warned = warning;
       await store.applyState(hash, mergeState(mine, merged));
       if (changed(mine, merged)) updated += 1;
     }
 
-    return { ok: true, text: tell(sent, taken, updated), arrived: taken };
+    return { ok: true, text: tell(sent, taken, updated, warned), arrived: taken };
   } catch (e) {
     // Читатель нажал кнопку и ждёт ответа: молчать нельзя, но и мешать
     // чтению эта неудача не должна.

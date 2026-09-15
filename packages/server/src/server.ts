@@ -9,7 +9,7 @@
  */
 
 import { createServer as createHttpServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
-import { SKEW_LIMIT, nameWithExt, sha256Hex, type SyncState } from "@fb2read/core";
+import { SKEW_LIMIT, nameWithExt, sha256Hex, type Bookmark, type SyncState } from "@fb2read/core";
 import { Storage, isHash, safeExt, type BookEntry } from "./storage.js";
 import { VERSION } from "./version.js";
 
@@ -343,26 +343,49 @@ export function createHandler(options: ServerOptions) {
     }
 
     const now = Date.now() / 1000;
+    const sent = typeof incoming.at === "number" && Number.isFinite(incoming.at) ? incoming.at : now;
     incoming = {
       ...incoming,
       hash,
-      bookmarks: Array.isArray(incoming.bookmarks) ? incoming.bookmarks : [],
-      at: typeof incoming.at === "number" ? incoming.at : now,
+      bookmarks: Array.isArray(incoming.bookmarks) ? incoming.bookmarks.map((m) => past(m, now)) : [],
+      at: Math.min(sent, now),
     };
 
     const merged = await storage.mergeIn(user, incoming, now);
 
-    // Слияние держится на времени. Если часы устройства ушли, оно начнёт
-    // выигрывать или проигрывать чужие записи ни за что — про это надо
-    // сказать, а не молча испортить позицию.
-    const skew = Math.abs(incoming.at - now);
+    // Слияние держится на времени, а время присылает устройство. Если его
+    // часы ушли вперёд, оно выигрывает у всех и навсегда: ни одна честная
+    // запись больше не окажется «позже». Поэтому будущее время обрезается до
+    // серверного — здесь и у закладок, — а читателю говорится, что случилось.
+    //
+    // Прошлое не трогаем: отставшие часы вредят только своему хозяину, а вот
+    // подмена такого времени сервером затёрла бы верные записи о том, когда
+    // книгу читали на самом деле.
+    const skew = Math.abs(sent - now);
     const warning =
       skew > SKEW_LIMIT
-        ? `часы устройства расходятся с сервером на ${Math.round(skew / 60)} мин: позиция может слиться неверно`
+        ? `часы устройства расходятся с сервером на ${Math.round(skew / 60)} мин` +
+          (sent > now ? ": время правки записано серверным" : ": позиция может слиться неверно")
         : undefined;
 
     json(response, 200, warning ? { state: merged, warning } : { state: merged }, cors);
   }
+}
+
+/**
+ * Закладка со временем не позже серверного.
+ *
+ * Надгробие с временем из будущего бессмертно: снятую закладку не вернуть
+ * никаким повторным нажатием, потому что любая живая запись оказывается
+ * «раньше». Обрезка возвращает спор к обычному правилу — кто позже, тот и
+ * прав, — а при равенстве побеждает пришедший сейчас.
+ *
+ * Закладки без времени остаются без времени: придумать им час значило бы
+ * поставить их выше тех, о которых точно известно, когда их сделали.
+ */
+function past(mark: Bookmark, now: number): Bookmark {
+  if (typeof mark?.at !== "number" || !Number.isFinite(mark.at) || mark.at <= now) return mark;
+  return { ...mark, at: now };
 }
 
 function readString(value: string | string[] | undefined): string {
