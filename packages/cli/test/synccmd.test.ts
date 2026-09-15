@@ -8,13 +8,13 @@
  */
 
 import { createServer, type Server } from "node:http";
-import { mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { sha256Hex, type Bookmark, type SyncState } from "@fb2read/core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { JsonFileStore } from "../src/store.js";
 import { syncOnDemand, type SyncSettings } from "../src/sync.js";
 
@@ -227,6 +227,136 @@ describe("скачивание книги", () => {
 
   it("имя с расширением оставляет как есть", async () => {
     expect(await pull("Война и мир.fb2")).toEqual(["Война и мир.fb2"]);
+  });
+});
+
+describe("скачивание всей полки", () => {
+  const книга = (название: string) =>
+    new TextEncoder().encode(
+      '<?xml version="1.0" encoding="utf-8"?><FictionBook><description><title-info>' +
+        `<book-title>${название}</book-title></title-info></description>` +
+        "<body><section><p>Текст.</p></section></body></FictionBook>",
+    );
+
+  /** Сервер, записывающий каждый путь: считаем запросы, а не догадываемся. */
+  function raise(
+    книги: { hash: string; name: string; data: Uint8Array }[],
+    местаЛомаются = false,
+  ): Promise<{
+    url: string;
+    log: string[];
+    close: () => Promise<void>;
+  }> {
+    const log: string[] = [];
+    const s = createServer((request, response) => {
+      const path = (request.url ?? "").split("?")[0]!;
+      log.push(path);
+      if (path === "/api/v1/books") {
+        response.writeHead(200, { "Content-Type": "application/json" });
+        response.end(
+          JSON.stringify({
+            books: книги.map((b) => ({
+              hash: b.hash, name: b.name, size: b.data.length, title: b.name, author: "", updatedAt: 1,
+            })),
+          }),
+        );
+        return;
+      }
+      const found = книги.find((b) => path === `/api/v1/books/${b.hash}`);
+      if (found) {
+        response.writeHead(200, { "Content-Type": "application/octet-stream" });
+        response.end(Buffer.from(found.data));
+        return;
+      }
+      if (местаЛомаются) {
+        response.writeHead(500, { "Content-Type": "application/json" });
+        response.end(JSON.stringify({ error: "сервер поперхнулся" }));
+        return;
+      }
+      // Места: у первой книги есть, у остальных нет.
+      response.writeHead(200, { "Content-Type": "application/json" });
+      response.end(
+        JSON.stringify({
+          states: книги[0]
+            ? [{ hash: книги[0].hash, block: 20, total: 100, title: книги[0].name, author: "", at: 1, bookmarks: [] }]
+            : [],
+        }),
+      );
+    });
+    return new Promise((done) => {
+      s.listen(0, "127.0.0.1", () =>
+        done({
+          url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`,
+          log,
+          close: () => new Promise<void>((r) => s.close(() => r())),
+        }),
+      );
+    });
+  }
+
+  async function pullAll(сколько: number, местаЛомаются = false) {
+    const { cmdPull } = await import("../src/sync.js");
+    const книги = await Promise.all(
+      Array.from({ length: сколько }, async (_, i) => {
+        const data = книга(`Книга ${i + 1}`);
+        return { hash: await sha256Hex(data), name: `Книга ${i + 1}.fb2`, data };
+      }),
+    );
+    const lib = mkdtempSync(join(tmpdir(), "fb2read-pull-"));
+    const было = process.env["FB2READ_LIBRARY"];
+    process.env["FB2READ_LIBRARY"] = lib;
+    const сервер = await raise(книги, местаЛомаются);
+    try {
+      const code = await cmdPull({ url: сервер.url, token: "proba-token" }, undefined, true, store());
+      // Читаем файл состояния до уборки: recent() отбрасывает записи, у
+      // которых книги на диске уже нет.
+      // Файла может не быть вовсе: без пришедших мест писать в него нечего.
+      let записано: Record<string, { block?: number } | undefined> = {};
+      try {
+        записано = JSON.parse(readFileSync(join(dir, "positions.json"), "utf-8")) as typeof записано;
+      } catch {
+        записано = {};
+      }
+      return { code, log: сервер.log, files: readdirSync(lib).sort(), записано };
+    } finally {
+      await сервер.close();
+      if (было === undefined) delete process.env["FB2READ_LIBRARY"];
+      else process.env["FB2READ_LIBRARY"] = было;
+      rmSync(lib, { recursive: true, force: true });
+    }
+  }
+
+  it("места спрашиваются один раз, а не по разу на книгу", async () => {
+    // Здесь и была O(n²): список мест выгружался заново для каждой книги, и
+    // на пяти книгах выходило одиннадцать запросов вместо семи.
+    const { code, log, files, записано } = await pullAll(3);
+    expect(code).toBe(0);
+    expect(files).toEqual(["Книга 1.fb2", "Книга 2.fb2", "Книга 3.fb2"]);
+    expect(log.filter((path) => path === "/api/v1/state")).toHaveLength(1);
+    expect(log).toHaveLength(5);
+    // И место при этом доехало: один запрос вместо трёх — не повод потерять
+    // позицию, ради которой всё и затевалось.
+    expect(Object.values(записано).filter((r) => r?.block === 20)).toHaveLength(1);
+  });
+
+  it("книги скачиваются, даже если места не пришли, и об этом сказано", async () => {
+    // Без позиции книга откроется с начала — досадно; без книги открывать
+    // будет нечего вовсе. Молчать при этом нельзя: читатель решит, что
+    // позиция потерялась сама.
+    const жалобы: string[] = [];
+    const перехват = vi.spyOn(process.stderr, "write").mockImplementation((line) => {
+      жалобы.push(String(line));
+      return true;
+    });
+    let итог: Awaited<ReturnType<typeof pullAll>>;
+    try {
+      итог = await pullAll(2, true);
+    } finally {
+      перехват.mockRestore();
+    }
+    expect(итог.code).toBe(0);
+    expect(итог.files).toEqual(["Книга 1.fb2", "Книга 2.fb2"]);
+    expect(жалобы.join("")).toContain("места с сервера не пришли");
   });
 });
 

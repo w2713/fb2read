@@ -377,6 +377,20 @@ export async function cmdPull(
     return 1;
   }
 
+  // Места спрашиваются один раз на всю команду. Раньше — по разу на книгу, и
+  // список приезжал заново каждой из них: на пяти книгах выходило
+  // одиннадцать запросов вместо семи, причём один и тот же ответ ехал пять
+  // раз. Отдельная выборка «по отпечатку» серверу не нужна: список мест — это
+  // номера абзацев и закладки, он мал даже на большой полке.
+  let states: SyncState[] = [];
+  try {
+    states = await client.states(0);
+  } catch (e) {
+    // Книги скачать всё равно стоит: без позиции они откроются с начала, а
+    // вот без книг открывать будет нечего. Но и молчать нельзя.
+    err(`места с сервера не пришли: ${e instanceof SyncError ? e.message : (e as Error).message}`);
+  }
+
   let failed = 0;
   for (const book of wanted) {
     try {
@@ -384,7 +398,7 @@ export async function cmdPull(
       const path = join(dir, nameWithExt(safeFileName(book.name), data));
       writeFileSync(path, data);
       out(`${book.name} → ${path}`);
-      await restorePosition(client, store, path, data, book.hash);
+      await restorePosition(store, path, data, book.hash, states);
     } catch (e) {
       err(`${book.name}: ${e instanceof SyncError ? e.message : (e as Error).message}`);
       failed += 1;
@@ -401,13 +415,12 @@ export async function cmdPull(
  * весь смысл затеи пропадёт.
  */
 async function applyRemoteState(
-  client: SyncClient,
   store: JsonFileStore,
   path: string,
   data: Uint8Array,
   hash: string,
+  states: SyncState[],
 ): Promise<number | null> {
-  const states = await client.states(0);
   const state = states.find((s) => s.hash === hash);
   if (!state) return null;
   const key = await bookKey(path, data.length);
@@ -417,13 +430,13 @@ async function applyRemoteState(
 
 /** То же для команды pull, но с рассказом в терминал. */
 async function restorePosition(
-  client: SyncClient,
   store: JsonFileStore,
   path: string,
   data: Uint8Array,
   hash: string,
+  states: SyncState[],
 ): Promise<void> {
-  const percent = await applyRemoteState(client, store, path, data, hash);
+  const percent = await applyRemoteState(store, path, data, hash, states);
   if (percent) out(`   позиция с сервера: ${percent}%`);
 }
 
@@ -576,7 +589,8 @@ export async function downloadBook(
   mkdirSync(dir, { recursive: true });
   const path = join(dir, nameWithExt(safeFileName(name), data));
   writeFileSync(path, data);
-  await applyRemoteState(client, store, path, data, hash);
+  // Одна книга — одна выборка мест: больше здесь и не нужно.
+  await applyRemoteState(store, path, data, hash, await client.states(0));
   return path;
 }
 
