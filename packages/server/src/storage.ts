@@ -8,6 +8,7 @@
  *   <корень>/<пользователь>/books/<отпечаток><расширение>
  *   <корень>/<пользователь>/state/<отпечаток>.json
  *   <корень>/<пользователь>/index.json
+ *   <корень>/<пользователь>/graveyard.json
  *
  * Отпечаток — sha256 содержимого книги, тот же, по которому книга узнаётся
  * на другом устройстве.
@@ -164,6 +165,41 @@ export class Storage {
     });
   }
 
+  // --- надгробия -----------------------------------------------------------
+
+  private graveyardPath(user: string): string {
+    return join(this.dir(user), "graveyard.json");
+  }
+
+  /**
+   * Отпечатки книг, удалённых с сервера.
+   *
+   * Без этой памяти удаление отменяется само: любое устройство, где книга
+   * осталась, выгружает её при первом же обмене — а обмен затевается сам, без
+   * спроса. Надгробие стоит недорого: отпечаток и время, около восьмидесяти
+   * байт, то есть тысяча удалённых книг — восемьдесят килобайт.
+   *
+   * Лежит в каталоге пользователя: сосед про мои удаления знать не должен.
+   */
+  async buried(user: string): Promise<Set<string>> {
+    return new Set(Object.keys(await readJson<Record<string, number>>(this.graveyardPath(user), {})));
+  }
+
+  private editGraveyard(user: string, edit: (graveyard: Record<string, number>) => void): Promise<void> {
+    return this.serial(`${user}/graveyard`, async () => {
+      const graveyard = await readJson<Record<string, number>>(this.graveyardPath(user), {});
+      edit(graveyard);
+      await writeAtomic(this.graveyardPath(user), JSON.stringify(graveyard, null, 1));
+    });
+  }
+
+  /** Снимает надгробие: книгу снова принимают как обычную. */
+  async unbury(user: string, hash: string): Promise<void> {
+    await this.editGraveyard(user, (graveyard) => {
+      delete graveyard[hash];
+    });
+  }
+
   /** Кладёт книгу и запоминает её в указателе. */
   async putBook(user: string, entry: BookEntry, data: Uint8Array): Promise<void> {
     await this.serial(`${user}/${entry.hash}`, async () => {
@@ -187,18 +223,31 @@ export class Storage {
     }
   }
 
-  /** Удаляет книгу вместе с её состоянием. */
+  /**
+   * Удаляет книгу вместе с её состоянием и ставит надгробие.
+   *
+   * Надгробие ставится и тогда, когда удалять было нечего: удаляют обычно с
+   * того устройства, где книгу видно, а вернуть её может любое другое — и
+   * порядок, в котором они доберутся до сервера, никому не известен.
+   *
+   * Состояние уносится и без записи в указателе: позицию синхронизируют и для
+   * книг, лежащих только на устройствах, а «удалить с сервера» — это и про
+   * неё. Поэтому удалённым считается и такой случай: что-то на сервере было.
+   */
   async deleteBook(user: string, hash: string): Promise<boolean> {
     return this.serial(`${user}/${hash}`, async () => {
+      await this.editGraveyard(user, (graveyard) => {
+        graveyard[hash] = Date.now() / 1000;
+      });
       const entry = await this.editIndex(user, (index) => {
         const found = index[hash] ?? null;
         delete index[hash];
         return found;
       });
-      if (!entry) return false;
-      await rm(join(this.dir(user), "books", `${hash}${entry.ext}`), { force: true });
-      await rm(join(this.dir(user), "state", `${hash}.json`), { force: true });
-      return true;
+      const hadState = (await this.state(user, hash)) !== null;
+      if (entry) await rm(join(this.dir(user), "books", `${hash}${entry.ext}`), { force: true });
+      if (entry || hadState) await rm(this.statePath(user, hash), { force: true });
+      return Boolean(entry) || hadState;
     });
   }
 

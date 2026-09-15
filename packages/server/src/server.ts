@@ -234,7 +234,11 @@ export function createHandler(options: ServerOptions) {
 
     if (rest === "books" && request.method === "GET") {
       const books = await storage.books(user);
-      json(response, 200, { books: books.map(({ ext: _ext, ...rest }) => rest) }, cors);
+      // Удалённые называются здесь же: устройство спрашивает список перед
+      // выгрузкой, и по нему оно молча пропустит то, что убрали, вместо того
+      // чтобы получать отказ на каждую попытку.
+      const buried = [...(await storage.buried(user))];
+      json(response, 200, { books: books.map(({ ext: _ext, ...rest }) => rest), buried }, cors);
       return;
     }
 
@@ -278,6 +282,22 @@ export function createHandler(options: ServerOptions) {
     user: string,
     hash: string,
   ): Promise<void> {
+    // Про надгробие спрашиваем до чтения тела: книга весит мегабайты, и
+    // принимать их, чтобы потом отказать, — потерянное время читателя.
+    // Тело при этом дочитывается и выбрасывается: оборванный сокет читатель
+    // увидел бы как «сервер недоступен» вместо внятного отказа.
+    const revive = readString(request.headers["x-revive"]) === "1";
+    if (!revive && (await storage.buried(user)).has(hash)) {
+      request.resume();
+      json(
+        response,
+        410,
+        { error: "эта книга удалена с сервера: вернуть её может только явная выгрузка" },
+        cors,
+      );
+      return;
+    }
+
     const data = await readBody(request, maxBytes);
 
     // Сверяем отпечаток. Иначе книгу можно было бы положить под чужим
@@ -317,6 +337,9 @@ export function createHandler(options: ServerOptions) {
       ext: safeExt(name),
     };
     await storage.putBook(user, entry, data);
+    // Надгробие снимается после того, как книга легла: не сложилось — пусть
+    // стоит, иначе отказ выгрузки тихо вернул бы книгу в обычные.
+    if (revive) await storage.unbury(user, hash);
     json(response, 200, { ok: true, hash }, cors);
   }
 

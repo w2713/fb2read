@@ -195,6 +195,89 @@ describe("книги", () => {
     await expect(c.download(hash)).rejects.toThrow(/нет/);
   });
 
+  it("удалённая книга не возвращается следующей выгрузкой", async () => {
+    // Иначе forget не работает вовсе: любое устройство, где книга осталась,
+    // возвращает её при первом же обмене — и делает это само, без спроса.
+    const hash = await sha256Hex(data);
+    const c = client();
+    await c.upload(hash, "книга.fb2", data);
+    await c.remove(hash);
+
+    await expect(c.upload(hash, "книга.fb2", data)).rejects.toThrow(/удалена/);
+    expect(await c.list()).toEqual([]);
+  });
+
+  it("список книг называет удалённые, чтобы их не слали заново", async () => {
+    // Устройство спрашивает список перед выгрузкой: так оно молча пропустит
+    // удалённое, а не будет получать отказ на каждую попытку.
+    const hash = await sha256Hex(data);
+    const c = client();
+    await c.upload(hash, "книга.fb2", data);
+    expect([...(await c.shelf()).buried]).toEqual([]);
+    await c.remove(hash);
+    expect([...(await c.shelf()).buried]).toEqual([hash]);
+  });
+
+  it("явная выгрузка возвращает удалённую книгу", async () => {
+    // Удаление бывает и по ошибке, а иначе вернуть книгу нечем: сервер
+    // отказывал бы навсегда, и полка стала бы только уменьшаться.
+    const hash = await sha256Hex(data);
+    const c = client();
+    await c.upload(hash, "книга.fb2", data);
+    await c.remove(hash);
+
+    await c.upload(hash, "книга.fb2", data, {}, { revive: true });
+    expect(await c.list()).toHaveLength(1);
+    // Надгробия больше нет: сама собой книга теперь выгружается как обычная.
+    expect([...(await c.shelf()).buried]).toEqual([]);
+    await c.upload(hash, "книга.fb2", data);
+    expect(await c.list()).toHaveLength(1);
+  });
+
+  it("надгробие переживает перезапуск сервера", async () => {
+    // Оно лежит файлом рядом с указателем: сервер перезапускают чаще, чем
+    // удаляют книги, и забывчивое надгробие не стоило бы ничего.
+    const hash = await sha256Hex(data);
+    await client().upload(hash, "книга.fb2", data);
+    await client().remove(hash);
+
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+    server = createServer({ dir, tokens: parseTokens(`я:${TOKEN}`) });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    url = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+
+    await expect(client().upload(hash, "книга.fb2", data)).rejects.toThrow(/удалена/);
+  });
+
+  it("надгробие одного не мешает другому выгружать свою книгу", async () => {
+    // Оно лежит в каталоге пользователя: сосед про мои удаления знать не
+    // должен, иначе моё forget отбирало бы книгу у него.
+    const hash = await sha256Hex(data);
+    await client(TOKEN).upload(hash, "моя.fb2", data);
+    await client(TOKEN).remove(hash);
+
+    await client("sosedskiy-token").upload(hash, "его.fb2", data);
+    expect(await client("sosedskiy-token").list()).toHaveLength(1);
+  });
+
+  it("удаление уносит и осиротевшее состояние", async () => {
+    // Состояние книги, которой на сервере нет, хранится отдельно. Без этого
+    // forget оставлял бы позицию и закладки, а они разъезжаются по всем
+    // устройствам наравне с книгой.
+    const hash = await sha256Hex(data);
+    const c = client();
+    await c.pushState(state({ hash, block: 7 }));
+    expect(await c.states(0)).toHaveLength(1);
+
+    // Удаление засчитывается: что-то же на сервере было.
+    await c.remove(hash);
+    expect(await c.states(0)).toEqual([]);
+
+    // А вот когда не было ничего — честное «нет такого».
+    const пусто = await sha256Hex(new TextEncoder().encode("этого сервер не видел"));
+    await expect(c.remove(пусто)).rejects.toThrow(/нет/);
+  });
+
   it("не показывает чужие книги", async () => {
     const hash = await sha256Hex(data);
     await client(TOKEN).upload(hash, "моя.fb2", data);
