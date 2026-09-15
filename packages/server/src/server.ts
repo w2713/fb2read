@@ -28,6 +28,29 @@ export interface ServerOptions {
 const DEFAULT_MAX_BYTES = 200 * 1024 * 1024;
 
 /**
+ * Предел на запись о месте и закладках.
+ *
+ * Она мала по природе: номер абзаца, время и список закладок по номерам —
+ * даже тысяча закладок не набирает и сотни килобайт. Четыре мегабайта здесь
+ * не мерка, а заслон от присланного наобум: свой предел нужен затем, чтобы
+ * книжный, в двести мегабайт, не пропускал такое в память.
+ */
+const STATE_MAX_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Размер словами: мегабайты, килобайты или байты.
+ *
+ * В отказе важен не порядок, а понятность: «больше 0 МБ» в ответ на предел в
+ * 32 байта читателю не говорит ничего, а такие пределы ставят в проверках и
+ * бывают у тех, кто ограничил сервер вручную.
+ */
+function sizeWords(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} МБ`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} КБ`;
+  return `${bytes} Б`;
+}
+
+/**
  * Сравнение токенов за одинаковое время.
  *
  * Обычное `===` выходит из сравнения на первом несовпавшем символе, и по
@@ -118,11 +141,11 @@ function json(response: ServerResponse, status: number, body: unknown, headers: 
  * выбрасывается. В подавляющем большинстве случаев до этого не доходит —
  * размер виден заранее из Content-Length.
  */
-function readBody(request: IncomingMessage, limit: number): Promise<Uint8Array> {
+function readBody(request: IncomingMessage, limit: number, what: string): Promise<Uint8Array> {
   const declared = Number.parseInt(String(request.headers["content-length"] ?? ""), 10);
   if (Number.isFinite(declared) && declared > limit) {
     request.resume();
-    return Promise.reject(new TooBig());
+    return Promise.reject(new TooBig(what, limit));
   }
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -139,14 +162,26 @@ function readBody(request: IncomingMessage, limit: number): Promise<Uint8Array> 
       chunks.push(chunk);
     });
     request.on("end", () => {
-      if (over) reject(new TooBig());
+      if (over) reject(new TooBig(what, limit));
       else resolve(new Uint8Array(Buffer.concat(chunks)));
     });
     request.on("error", reject);
   });
 }
 
-class TooBig extends Error {}
+/**
+ * Что не поместилось и во что именно.
+ *
+ * Без этого отказ говорил не то: состояние читается со своим пределом в
+ * четыре мегабайта, а в ответ приходило «книга больше 200 МБ» — и про книгу,
+ * которой в запросе не было, и про предел, которого никто не переступал.
+ * Читатель после такого ищет толстую книгу, а дело в записи о закладках.
+ */
+class TooBig extends Error {
+  constructor(what: string, limit: number) {
+    super(`${what} больше ${sizeWords(limit)}`);
+  }
+}
 
 /** Собирает обработчик запросов. */
 export function createHandler(options: ServerOptions) {
@@ -216,7 +251,7 @@ export function createHandler(options: ServerOptions) {
       await route(request, response, user, url, path);
     } catch (e) {
       if (e instanceof TooBig) {
-        json(response, 413, { error: `книга больше ${Math.round(maxBytes / 1048576)} МБ` }, cors);
+        json(response, 413, { error: e.message }, cors);
         return;
       }
       json(response, 500, { error: (e as Error).message }, cors);
@@ -298,7 +333,7 @@ export function createHandler(options: ServerOptions) {
       return;
     }
 
-    const data = await readBody(request, maxBytes);
+    const data = await readBody(request, maxBytes, "книга");
 
     // Сверяем отпечаток. Иначе книгу можно было бы положить под чужим
     // именем — и другое устройство скачало бы не то, что ждёт.
@@ -363,7 +398,7 @@ export function createHandler(options: ServerOptions) {
     user: string,
     hash: string,
   ): Promise<void> {
-    const body = await readBody(request, 4 * 1024 * 1024);
+    const body = await readBody(request, STATE_MAX_BYTES, "запись о месте и закладках");
     let incoming: SyncState;
     try {
       incoming = JSON.parse(new TextDecoder().decode(body)) as SyncState;
